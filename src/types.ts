@@ -19,6 +19,7 @@ export interface Conversation {
   draftText: string;
   draftAttachments: ContextAttachment[];
   model: string;
+  imagePaths?: readonly string[];
 }
 
 export interface PluginSettings {
@@ -36,11 +37,13 @@ export interface CodexExecutionSettings {
   approveForMe: boolean;
   sessionId: string | null;
   model: string;
+  imagePaths?: readonly string[];
 }
 
 export interface CodexRunCallbacks {
   onThreadId: (threadId: string) => void;
   onStatus: (status: string) => void;
+  onCleanupWarning?: (message: string) => void;
   onProgress: (event: CodexProgressEvent) => void;
 }
 import type { CodexProgressEvent } from "./codex-events.ts";
