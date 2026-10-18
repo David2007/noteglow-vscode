@@ -1,0 +1,302 @@
+{
+  "name": "noteglow",
+  "displayName": "NoteGlow",
+  "version": "0.1.0",
+  "publisher": "David2007",
+  "description": "彩色 Markdown · 多选区引用 · 本机 Codex 对话",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "Themes"
+  ],
+  "keywords": [
+    "markdown",
+    "codex",
+    "chatgpt",
+    "color",
+    "notes"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "david yang",
+    "email": "xting.yang@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/David2007/noteglow-vscode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/David2007/noteglow-vscode/issues"
+  },
+  "homepage": "https://github.com/David2007/noteglow-vscode#readme",
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "仅支持本机磁盘工作区。"
+    },
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "格式与主题可用；Codex 执行需要信任工作区。",
+      "restrictedConfigurations": [
+        "noteglow.codexPath"
+      ]
+    }
+  },
+  "activationEvents": [
+    "onView:noteglow.chat",
+    "onLanguage:markdown"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "noteglow.open",
+        "title": "打开 NoteGlow",
+        "category": "NoteGlow",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "noteglow.addSelection",
+        "title": "添加选区到 Codex",
+        "category": "NoteGlow",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "noteglow.addFile",
+        "title": "添加当前 Markdown 文件到 Codex",
+        "category": "NoteGlow",
+        "icon": "$(file-add)"
+      },
+      {
+        "command": "noteglow.bold",
+        "title": "加粗",
+        "category": "NoteGlow",
+        "icon": "$(bold)"
+      },
+      {
+        "command": "noteglow.italic",
+        "title": "斜体",
+        "category": "NoteGlow",
+        "icon": "$(italic)"
+      },
+      {
+        "command": "noteglow.code",
+        "title": "行内代码",
+        "category": "NoteGlow",
+        "icon": "$(code)"
+      },
+      {
+        "command": "noteglow.foreground",
+        "title": "应用上次字体颜色",
+        "category": "NoteGlow",
+        "icon": "$(text-size)"
+      },
+      {
+        "command": "noteglow.background",
+        "title": "应用上次背景颜色",
+        "category": "NoteGlow",
+        "icon": "$(paintcan)"
+      },
+      {
+        "command": "noteglow.chooseForeground",
+        "title": "选择字体颜色",
+        "category": "NoteGlow",
+        "icon": "$(symbol-color)"
+      },
+      {
+        "command": "noteglow.chooseBackground",
+        "title": "选择背景颜色",
+        "category": "NoteGlow",
+        "icon": "$(symbol-color)"
+      },
+      {
+        "command": "noteglow.clearColor",
+        "title": "清除选区颜色",
+        "category": "NoteGlow",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "noteglow.theme",
+        "title": "使用绿豆色主题",
+        "category": "NoteGlow",
+        "icon": "$(color-mode)"
+      },
+      {
+        "command": "noteglow.restoreTheme",
+        "title": "恢复之前的主题",
+        "category": "NoteGlow",
+        "icon": "$(history)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "noteglow",
+          "title": "NoteGlow",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "noteglow": [
+        {
+          "id": "noteglow.chat",
+          "name": "彩色笔记 · Codex",
+          "type": "webview"
+        }
+      ]
+    },
+    "themes": [
+      {
+        "label": "NoteGlow 绿豆色",
+        "uiTheme": "vs",
+        "path": "themes/bean-green.json"
+      }
+    ],
+    "configuration": {
+      "title": "NoteGlow",
+      "properties": {
+        "noteglow.codexPath": {
+          "type": "string",
+          "default": "codex",
+          "scope": "application",
+          "description": "本机 Codex CLI 可执行路径（单值，不支持参数或 shell 表达式）。"
+        },
+        "noteglow.sandboxMode": {
+          "type": "string",
+          "enum": [
+            "read-only",
+            "workspace-write"
+          ],
+          "default": "read-only",
+          "scope": "application",
+          "enumDescriptions": [
+            "只读工作区。",
+            "允许 CLI 修改当前会话固定根目录；仍受 CLI/系统权限约束。"
+          ]
+        },
+        "noteglow.approveForMe": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "workspace-write 时启用 Codex 自动审批；默认关闭。"
+        },
+        "noteglow.selectionCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Markdown 中显示当前选区格式和添加到对话入口。"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "noteglow.addSelection",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@0"
+        },
+        {
+          "command": "noteglow.bold",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@1"
+        },
+        {
+          "command": "noteglow.italic",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@2"
+        },
+        {
+          "command": "noteglow.code",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@3"
+        },
+        {
+          "command": "noteglow.foreground",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@4"
+        },
+        {
+          "command": "noteglow.background",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@5"
+        },
+        {
+          "command": "noteglow.chooseForeground",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@6"
+        },
+        {
+          "command": "noteglow.chooseBackground",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@7"
+        },
+        {
+          "command": "noteglow.clearColor",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@8"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "noteglow.addSelection",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "noteglow.theme",
+          "when": "view == noteglow.chat",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "noteglow.addSelection",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a",
+        "when": "editorLangId == markdown && editorHasSelection"
+      },
+      {
+        "command": "noteglow.bold",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "editorLangId == markdown && editorHasSelection"
+      },
+      {
+        "command": "noteglow.italic",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i",
+        "when": "editorLangId == markdown && editorHasSelection"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc --noEmit && node esbuild.config.mjs",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.mjs",
+    "test:coverage": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-test-coverage --test --test-coverage-include=\"src/**\" tests/*.test.mjs",
+    "package": "vsce package --no-dependencies",
+    "test:integration": "node scripts/integration.mjs"
+  },
+  "dependencies": {
+    "entities": "6.0.1",
+    "mdast-util-from-markdown": "2.1.0",
+    "mdast-util-gfm": "3.1.0",
+    "micromark-extension-gfm": "3.0.0",
+    "parse5": "8.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.96.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.7.2"
+  }
+}
