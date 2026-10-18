@@ -27,7 +27,8 @@ export class ChatStore {
   private structuralChange = false;
   private cancelled = false;
   private queue: Promise<void> = Promise.resolve();
-  constructor(state: State, private write: (state: State) => Promise<void>) { this.state = state; }
+  private write: (state: State) => Promise<void>;
+  constructor(state: State, write: (state: State) => Promise<void>) { this.state = state; this.write = write; }
   current(): Conversation | undefined { return this.state.conversations.find(c => c.id === this.state.activeId); }
   async persist(): Promise<void> { const snapshot = structuredClone(this.state); const pending = this.queue.catch(() => {}).then(() => this.write(snapshot)); this.queue = pending; await pending; }
   async create(root: string): Promise<Conversation> {

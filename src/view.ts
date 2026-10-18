@@ -3,7 +3,9 @@ import { randomBytes } from "node:crypto";
 import { parseViewMessage, type ViewMessage } from "./security.ts";
 export class ChatView implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
-  constructor(private extensionUri: vscode.Uri, private receive: (message: ViewMessage) => Promise<void>) {}
+  private extensionUri: vscode.Uri;
+  private receive: (message: ViewMessage) => Promise<void>;
+  constructor(extensionUri: vscode.Uri, receive: (message: ViewMessage) => Promise<void>) { this.extensionUri = extensionUri; this.receive = receive; }
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view; const webview = view.webview, media = vscode.Uri.joinPath(this.extensionUri, "media");
     webview.options = { enableScripts: true, localResourceRoots: [media] };

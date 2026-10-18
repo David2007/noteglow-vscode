@@ -15,7 +15,8 @@ export class CodexClient {
   private starting = false;
   private cancelled = false;
   private forceFinish?: () => void;
-  constructor(private readonly limits = { timeoutMs: 600_000, maxOutputBytes: 4_000_000, maxLineChars: 1_000_000 }) {}
+  private readonly limits: { timeoutMs: number; maxOutputBytes: number; maxLineChars: number };
+  constructor(limits = { timeoutMs: 600_000, maxOutputBytes: 4_000_000, maxLineChars: 1_000_000 }) { this.limits = limits; }
 
   async resolveExecutable(configuredPath: string): Promise<string> {
     const configured = configuredPath.trim();
