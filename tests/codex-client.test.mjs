@@ -134,3 +134,18 @@ test("deadline cancels running process, empty output and missing executable reje
 test('timeout settles even when wrapper descendants hold inherited stdio',async()=>{const c=new CodexClient({timeoutMs:250,maxOutputBytes:4000000,maxLineChars:1000000});const started=Date.now();await assert.rejects(c.send('descendant',process.cwd(),settings(null),{onThreadId(){},onStatus(){},onProgress(){}}),/超过/);assert.equal(c.running,false);assert.ok(Date.now()-started<6000);});
 
 test('synchronous spawn argument failure does not poison the request lock',async()=>{const c=new CodexClient();const cb={onThreadId(){},onStatus(){},onProgress(){}};await assert.rejects(c.send('x',process.cwd(),{...settings(null),codexPath:'bad\0path'},cb),/无法启动/);assert.equal(c.running,false);assert.equal(await c.send('hello',process.cwd(),settings(null),cb),'已完成');});
+
+test('new and resumed CLI receive actual image arguments, stdin and unchanged permissions',async t=>{
+ const {mkdtemp,writeFile,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');const {createHash}=await import('node:crypto');const {png}=await import('./fixtures/image-fixtures.mjs');
+ const directory=await mkdtemp(join(tmpdir(),'ng-cli-images-'));t.after(()=>rm(directory,{recursive:true,force:true}));const paths=[join(directory,'one.png'),join(directory,'two.png')],bytes=[png(),png(24,16,[1,2,3])];for(let i=0;i<2;i++)await writeFile(paths[i],bytes[i]);
+ for(const sessionId of [null,'existing-thread']){
+  const client=new CodexClient();const response=JSON.parse(await client.send('verify-images',directory,{...settings(sessionId),imagePaths:paths},{onThreadId(){},onStatus(){},onProgress(){}}));
+  assert.deepEqual(response.images,bytes.map(data=>createHash('sha256').update(data).digest('hex')));assert.deepEqual(response.args.slice(-2),['--','-']);assert.equal(response.args.includes('--dangerously-bypass-approvals-and-sandbox'),false);
+  if(sessionId)assert.ok(response.args.indexOf(sessionId)<response.args.indexOf('--image'),'positional session is bound before variadic image options');else assert.ok(response.args.includes('read-only'));
+ }
+});
+test('ten image paths are accepted, invalid image guards release the client lock',async()=>{
+ assert.equal(buildCodexArgs({...settings(null),imagePaths:Array.from({length:10},(_,i)=>`/tmp/${i}.png`)},'/notes').filter(x=>x==='--image').length,10);
+ for(const imagePaths of [Array(11).fill('/tmp/a.png'),['relative.png'],['/tmp/bad\0.png']])assert.throws(()=>buildCodexArgs({...settings('thread'),imagePaths},'/notes'),/图片发送路径/);
+ const client=new CodexClient(),cb={onThreadId(){},onStatus(){},onProgress(){}};await assert.rejects(client.send('verify-images',process.cwd(),{...settings(null),imagePaths:['relative']},cb),/图片发送路径/);assert.equal(client.running,false);assert.equal(await client.send('hello',process.cwd(),settings(null),cb),'已完成');
+});

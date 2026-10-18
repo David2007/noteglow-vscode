@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access } from "node:fs/promises";
+import { MAX_IMAGES } from "./image-attachments.ts";
 import { delimiter, isAbsolute } from "node:path";
 import { parseCodexEvent } from "./codex-events.ts";
 import type { CodexExecutionSettings, CodexRunCallbacks } from "./types.ts";
@@ -56,7 +57,8 @@ export class CodexClient {
       executable = await this.resolveExecutable(settings.codexPath);
       if (this.cancelled) throw new Error("Codex 执行已停止。");
     } catch (error) { this.starting = false; throw error; }
-    const args = buildCodexArgs(settings, vaultPath);
+    let args: string[];
+    try { args = buildCodexArgs(settings, vaultPath); } catch(e) { this.starting = false; throw e; }
 
     callbacks.onStatus(settings.sessionId ? "正在继续对话…" : "正在启动 Codex…");
 
@@ -153,13 +155,17 @@ export class CodexClient {
 
 export function buildCodexArgs(settings: CodexExecutionSettings, vaultPath: string): string[] {
   const model = settings.model ? ["--model", settings.model] : [];
+  const images = settings.imagePaths ?? [];
+  if (!Array.isArray(images) || images.length > MAX_IMAGES || images.some(path => typeof path !== "string" || !isAbsolute(path) || path.includes("\0"))) throw new Error("图片发送路径无效。");
+  const imageArgs = images.flatMap(path => ["--image", path]);
+  const input = images.length ? ["--", "-"] : ["-"];
   if (settings.sessionId) {
     // 续聊也显式传模型并允许非 Git Vault；无需另一个包装脚本修补参数。
     const sandbox = ["-c", `sandbox_mode="${settings.sandboxMode}"`];
     const approvals = ["-c", 'approval_policy="on-request"', "-c",
       `approvals_reviewer="${settings.approveForMe && settings.sandboxMode === "workspace-write" ? "auto_review" : "user"}"`];
     // exec resume 会重新加载全局配置，不能依赖旧会话或本机全局权限来保证当前 Vault 边界。
-    return ["exec", "resume", "--json", "--skip-git-repo-check", ...sandbox, ...approvals, ...model, settings.sessionId, "-"];
+    return ["exec", "resume", "--json", "--skip-git-repo-check", ...sandbox, ...approvals, ...model, settings.sessionId, ...imageArgs, ...input];
   }
 
   const approvalArgs = settings.approveForMe && settings.sandboxMode === "workspace-write"
@@ -176,7 +182,8 @@ export function buildCodexArgs(settings: CodexExecutionSettings, vaultPath: stri
     "-c", `approvals_reviewer="${settings.approveForMe && settings.sandboxMode === "workspace-write" ? "auto_review" : "user"}"`,
     "--cd",
     vaultPath,
-    "-"
+    ...imageArgs,
+    ...input
   ];
 }
 
