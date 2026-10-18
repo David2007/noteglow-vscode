@@ -292,6 +292,7 @@
     "parse5": "8.0.1"
   },
   "devDependencies": {
+    "@codemirror/state": "6.5.0",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.96.0",
     "@vscode/test-electron": "^2.5.2",
