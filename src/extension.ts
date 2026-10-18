@@ -66,7 +66,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     status = "正在保存并启动 Codex…";
     // send 在首次 await 前占用实例槽位；处理器不等待 CLI，停止按钮仍可进入。
     const pending = store.send(c.id, runner, settings, {onThreadId:()=>render(),onStatus:s=>{status=s;render();},onProgress:p=>{status=p.label;render();}}, () => verifyRoot(c.root));
-    render(); void pending.catch(e=>vscode.window.showErrorMessage((e as Error).message)).finally(()=>{status="";render();});
+    render(); void pending.catch(e=>{ void vscode.window.showErrorMessage((e as Error).message); }).finally(()=>{status="";render();});
   }
   async function handle(message: ViewMessage): Promise<void> {
     if(message.type !== "ready") store.assertConversation(message.conversationId);
