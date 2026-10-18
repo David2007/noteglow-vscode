@@ -2,7 +2,7 @@
 const vscode = acquireVsCodeApi();
 const $ = id => document.getElementById(id);
 let active = '', busy = false, rendering = false, uploading = false, limits, uploadEpoch = 0, inputRevision = 0, pendingUpload, pendingSend;
-const imageNodes = new Map(), imageUrls = new Map();
+const imageNodes = new Map(), imageUrls = new Map(), removeButtons = new Set();
 const observer = typeof IntersectionObserver === 'undefined' ? undefined : new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){requestImage(entry.target);observer.unobserve(entry.target);}});
 function post(type, extra = {}) { vscode.postMessage(type === 'ready' ? {type} : {type, conversationId: active, ...extra}); }
 function draft() { if(!rendering) post('draft',{text:$('question').value,model:$('model').value}); }
@@ -11,6 +11,7 @@ function controls() {
   for(const id of ['new','conversations'])$(id).disabled=locked;
   for(const id of ['delete','question','model','send','add-images'])$(id).disabled=locked||!active;
   for(const button of document.querySelectorAll('[data-command]'))button.disabled=locked;
+  for(const button of removeButtons)button.disabled=locked;
   $('stop').disabled=!locked;
 }
 $('question').addEventListener('input',()=>{inputRevision++;draft();});$('model').addEventListener('change',draft);
@@ -32,7 +33,7 @@ function imageCard(image,removable){
   const key=`${active}:${image.id}`;if(!imageNodes.has(key))imageNodes.set(key,[]);imageNodes.get(key).push(img);
   if(imageUrls.has(key))img.src=imageUrls.get(key);else if(observer)observer.observe(img);else requestImage(img);
   name.textContent=image.name;preview.append(img,name);preview.onclick=()=>post('previewImage',{id:image.id});card.append(preview);
-  if(removable){const remove=document.createElement('button');remove.textContent='×';remove.title='移除图片';remove.disabled=busy||uploading;remove.onclick=()=>post('removeImage',{id:image.id});card.append(remove);}
+  if(removable){const remove=document.createElement('button');remove.textContent='×';remove.title='移除图片';removeButtons.add(remove);remove.disabled=busy||uploading;remove.onclick=()=>post('removeImage',{id:image.id});card.append(remove);}
   return card;
 }
 function asBase64(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(Error('图片读取失败，请重新选择。'));reader.onload=()=>{const value=String(reader.result),comma=value.indexOf(',');if(comma<0)reject(Error('图片编码失败。'));else resolve(value.slice(comma+1));};reader.readAsDataURL(file);});}
@@ -77,7 +78,7 @@ window.addEventListener('message',({data:s})=>{
   const c=s.conversation,switched=(c?.id??'')!==active;
   if(switched){uploadEpoch++;pendingUpload=undefined;uploading=false;pendingSend=undefined;inputRevision=0;}
   const selectedModel=switched||!c?(c?.model??''):$('model').value;
-  active=c?.id??'';busy=s.busy;imageNodes.clear();observer?.disconnect();
+  active=c?.id??'';busy=s.busy;imageNodes.clear();removeButtons.clear();observer?.disconnect();
   $('conversations').replaceChildren(...s.conversations.map(c=>option(c.id,c.title)));$('conversations').value=active;
   $('root').textContent=c?`固定根目录：${c.root}`:'新建对话后，引用和草稿保存在本机工作区。';
   $('model').replaceChildren(option('','Codex 默认'),...s.models.map(m=>option(m.slug,m.displayName)));
@@ -89,7 +90,7 @@ window.addEventListener('message',({data:s})=>{
     if(m.images?.length){const images=document.createElement('div');images.className='history-images';images.append(...m.images.map(image=>imageCard(image,false)));article.append(images);}return article;
   }));
   $('attachments').replaceChildren(...(c?.attachments??[]).map(a=>{
-    const card=document.createElement('span');card.className='card';const preview=document.createElement('button'),remove=document.createElement('button');preview.textContent=`${a.path.split(/[\\/]/).pop()}:${a.startLine??1}-${a.endLine??1}`;preview.title=`${a.path} · ${a.content.length} 字符，点击预览`;preview.onclick=()=>post('preview',{id:a.id});remove.textContent='×';remove.title='移除引用';remove.onclick=()=>post('detach',{id:a.id});remove.disabled=busy||uploading;card.append(preview,remove);return card;
+    const card=document.createElement('span');card.className='card';const preview=document.createElement('button'),remove=document.createElement('button');preview.textContent=`${a.path.split(/[\\/]/).pop()}:${a.startLine??1}-${a.endLine??1}`;preview.title=`${a.path} · ${a.content.length} 字符，点击预览`;preview.onclick=()=>post('preview',{id:a.id});remove.textContent='×';remove.title='移除引用';removeButtons.add(remove);remove.onclick=()=>post('detach',{id:a.id});remove.disabled=busy||uploading;card.append(preview,remove);return card;
   }));
   const images=c?.draftImages??[];$('images').replaceChildren(...images.map(image=>imageCard(image,true)));
   $('image-count').dataset.count=String(images.length);$('image-count').dataset.bytes=String(images.reduce((sum,image)=>sum+image.size,0));$('image-count').textContent=limits?`图片 ${images.length}/${limits.maxImages}`:'';
