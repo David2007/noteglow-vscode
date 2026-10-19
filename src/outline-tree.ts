@@ -6,6 +6,7 @@ import { sourceHeadings } from "./outline-source.ts";
 export function registerOutline(context: vscode.ExtensionContext): vscode.Disposable {
   const changed = new vscode.EventEmitter<OutlineNode | undefined>();
   let editor: vscode.TextEditor | undefined, roots: OutlineNode[] = [], flat: OutlineNode[] = [], revision = -1;
+  let pinned: { editor: vscode.TextEditor; line: number } | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined, disposed = false;
   const provider: vscode.TreeDataProvider<OutlineNode> = {
     onDidChangeTreeData: changed.event,
@@ -20,7 +21,7 @@ export function registerOutline(context: vscode.ExtensionContext): vscode.Dispos
     }
   };
   const view = vscode.window.createTreeView("noteglow.outline", { treeDataProvider: provider, showCollapseAll: true });
-  const reveal = (line = editor?.selection.active.line): void => {
+  const reveal = (line = pinned && pinned.editor === editor ? pinned.line : editor?.selection.active.line): void => {
     if (!editor || !view.visible) return;
     const node = currentHeading(flat, line ?? 0);
     if (node) void view.reveal(node, { select: true, focus: false, expand: false }).then(undefined, () => {});
@@ -32,6 +33,7 @@ export function registerOutline(context: vscode.ExtensionContext): vscode.Dispos
     if (!active) return;
     const next = active.document.languageId === "markdown" ? active : undefined;
     if (next === editor && next?.document.version === revision) { reveal(); return; }
+    pinned = undefined;
     editor = next; revision = next?.document.version ?? -1;
     roots = next ? outlineTree(sourceHeadings(next.document.getText())) : [];
     flat = []; const collect = (nodes: OutlineNode[]): void => { for (const node of nodes) { flat.push(node); collect(node.children); } }; collect(roots);
@@ -51,12 +53,26 @@ export function registerOutline(context: vscode.ExtensionContext): vscode.Dispos
       const doc = await vscode.workspace.openTextDocument(uri);
       if (version !== undefined && doc.version !== version) { refresh(); return; }
       const target = await vscode.window.showTextDocument(doc, { viewColumn: column, preserveFocus: false });
+      refresh();
       const position = new vscode.Position(Math.min(line, doc.lineCount - 1), 0);
-      target.selection = new vscode.Selection(position, position); target.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.AtTop);
+      // Sticky Scroll 可能让视口顶部停在标题前两行；目标仍可见时保留明确点击的章节。
+      pinned = { editor: target, line: position.line };
+      target.selection = new vscode.Selection(position, position); target.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.AtTop); reveal();
     }),
     vscode.window.onDidChangeActiveTextEditor(refresh),
-    vscode.window.onDidChangeTextEditorSelection(event => { if (event.textEditor === editor) reveal(); }),
-    vscode.window.onDidChangeTextEditorVisibleRanges(event => { if (event.textEditor === editor) reveal(event.visibleRanges[0]?.start.line); }),
+    vscode.window.onDidChangeTextEditorSelection(event => {
+      if (event.textEditor !== editor) return;
+      if (pinned && editor.selection.active.line !== pinned.line) pinned = undefined;
+      reveal();
+    }),
+    vscode.window.onDidChangeTextEditorVisibleRanges(event => {
+      if (event.textEditor !== editor) return;
+      if (pinned && pinned.editor === editor) {
+        if (event.visibleRanges.some(range => range.start.line <= pinned!.line && range.end.line >= pinned!.line)) { reveal(); return; }
+        pinned = undefined;
+      }
+      reveal(event.visibleRanges[0]?.start.line);
+    }),
     vscode.workspace.onDidChangeTextDocument(event => { if (event.document === editor?.document) { clearTimeout(timer); timer = setTimeout(refresh, 150); } }),
     view.onDidChangeVisibility(event => { if (event.visible) reveal(); })
   ];
