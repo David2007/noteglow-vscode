@@ -1,7 +1,7 @@
 {
   "name": "noteglow",
   "displayName": "NoteGlow",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "David2007",
   "description": "彩色 Markdown · 图片与多选区引用 · 本机 Codex 对话",
   "engines": {

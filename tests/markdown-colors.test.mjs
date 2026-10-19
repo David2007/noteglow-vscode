@@ -270,3 +270,29 @@ test("returned selections support color, bold, italic and clear without reselect
   assert.equal(result.text, "***背景再加粗***");
   assert.equal(result.text.slice(result.from, result.to), "背景再加粗");
 });
+
+test("pre wrapper whitespace permits three independent colors without changing code bytes", () => {
+  const code = 'update(a)\r\nupdatePtr(&a) // &amp; 😀\r\n\r\n';
+  const first = paint("```go\r\n" + code + "```\r\n", "update(a)").text;
+  const spaced = first.replace("><code", ">\n\t <code").replace("</code></pre>", "</code>\n</pre>");
+  const amp = spaced.indexOf("&amp;a");
+  assert.ok(amp >= 0);
+  const second = applyMarkdownColor(spaced, amp, amp + "&amp;".length, "background", bg).text;
+  const third = paint(second, "updatePtr", "foreground", fg).text;
+  assert.equal(codeText(second), code);
+  assert.equal(codeText(third), code);
+  assert.deepEqual(paintedText(third), [
+    { text: "update(a)", style: `background-color:${bg}` },
+    { text: "updatePtr", style: `color:${fg}` },
+    { text: "&", style: `background-color:${bg}` }
+  ]);
+  noNestedSpans(third);
+});
+
+test("pre wrapper rejects non-whitespace siblings and multiple code children", () => {
+  const canonical = paint("```go\nfirst\nsecond\n```\n", "first").text;
+  for (const sibling of ["unexpected", "&nbsp;", "<code>other</code>", "<!--comment-->", "<b>bad</b>"]) {
+    const malformed = canonical.replace("</code></pre>", `</code>${sibling}</pre>`);
+    assert.throws(() => paint(malformed, "second"), /代码容器结构/);
+  }
+});

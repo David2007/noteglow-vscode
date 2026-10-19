@@ -203,7 +203,12 @@ function flattenHtml(text: string, item: Owned): FlatHtml {
       if (!location || !("startTag" in location) || !location.startTag || !location.endTag) throw new Error("插件 HTML 标签未闭合。");
       const current = color ? { ...inherited, ...parseStyles(node) } : inherited;
       boundaries.set(location.startTag.endOffset, units.length);
-      for (const child of node.childNodes) visit(child, current);
+      // pre 边界换行属于 HTML 排版，不属于代码正文；仅允许空白及唯一 code。
+      if (root && item.code && item.block) {
+        const code = node.childNodes.filter((child) => isElement(child) && child.tagName === "code");
+        if (code.length !== 1 || node.childNodes.some((child) => child !== code[0] && !(child.nodeName === "#text" && "value" in child && /^[\t\n\r\f ]*$/.test(child.value)))) throw new Error("插件代码容器结构不完整。");
+        visit(code[0], current);
+      } else for (const child of node.childNodes) visit(child, current);
       boundaries.set(location.endTag.startOffset, units.length);
     } else if ("childNodes" in node) for (const child of node.childNodes) visit(child, inherited);
     else throw new Error("插件颜色区域含无法确认的 HTML 内容。");
@@ -242,7 +247,7 @@ function buildModel(text: string, colors: readonly ColorRange[]): Model {
   for (const island of codeIslands) {
     const flat = flattenHtml(text, island);
     const code = island.block ? island.node.childNodes.find((node): node is HtmlElement => isElement(node) && node.tagName === "code") : island.node;
-    if (!code || (island.block && island.node.childNodes.some((node) => node !== code))) throw new Error("插件代码容器结构不完整。");
+    if (!code) throw new Error("插件代码容器结构不完整。");
     const lang = attr(code, "data-codex-lang") ?? attr(code, "class")?.replace(/^language-/, "");
     leaves.push({ from: island.from, to: island.to, value: flat.units.map((unit) => unit.value).join(""), units: flat.units, styles: flat.styles, code: true, block: island.block, owned: true, lang, boundaries: flat.boundaries });
   }
