@@ -5,7 +5,7 @@ import { parseFragment, type DefaultTreeAdapterMap } from "parse5";
 import { EntityDecoder, DecodingMode, htmlDecodeTree } from "entities/decode";
 import { mergeRanges, normalizeColor, replaceColor, type ColorProperty, type ColorRange } from "./color-ranges.ts";
 
-export interface PortableColorEdit { text: string; from: number; to: number }
+export interface PortableColorEdit { text: string; from: number; to: number; ranges?: ColorRange[] }
 type Format = "bold" | "italic" | "code";
 type Styles = Partial<Record<ColorProperty, string>>;
 interface Unit { from: number; to: number; value: string }
@@ -22,6 +22,28 @@ interface Leaf { from: number; to: number; value: string; units: Unit[]; styles:
 interface Model { ast: MdNode; leaves: Leaf[]; unknownHtml: Array<{ from: number; to: number }>; protected: Array<{ from: number; to: number; kind: string }> }
 const MAX_CHARS = 1_000_000;
 const MAX_RANGES = 10_000;
+
+/** 仅导出可无损迁移的顶层自有块；未知属性、内容和缺少末尾换行均拒绝。 */
+export function decodeOwnedCodeBlocks(text: string): Array<{ from: number; to: number; code: string; lang: string; ranges: ColorRange[]; positions: Array<{ from: number; to: number }> }> {
+  if (text.length > MAX_CHARS) throw new Error("笔记过大，无法安全迁移。");
+  const ast = parseMarkdown(text), owned = parseOwned(text, ast).owned.filter((item) => item.code && item.block);
+  const protectedRegions = markdownProtectedRanges(text);
+  return owned.map((item) => {
+    if (protectedRegions.some((range) => item.from < range.to && item.to > range.from)) throw new Error("代码块位于受保护的扩展语法中，未迁移。");
+    const top = ast.children?.filter((node) => node.type === "html" && position(node).from <= item.from && position(node).to >= item.to) ?? [];
+    if (top.length !== 1 || text.slice(position(top[0]).from, item.from).trim() || text.slice(item.to, position(top[0]).to).trim() || /[^\r\n]/.test(text.slice(text.lastIndexOf("\n", item.from - 1) + 1, item.from))) throw new Error("只支持独立顶层 HTML 代码块迁移，请先分离嵌套或同行内容。");
+    const flat = flattenHtml(text, item), code = flat.units.map((unit) => unit.value).join("");
+    if (!code.endsWith("\n") || code.includes("\r") && /\r(?!\n)/.test(code)) throw new Error("旧代码缺少末尾换行或使用单独 CR，无法无损恢复围栏。");
+    const node = item.node.childNodes.find((child): child is HtmlElement => isElement(child) && child.tagName === "code")!;
+    const lang = attr(node, "data-codex-lang") ?? attr(node, "class")?.replace(/^language-/, "") ?? "";
+    if (/[\s`~<>]/.test(lang) || attr(node, "class") && attr(node, "class") !== `language-${lang}`) throw new Error("代码语言属性无法安全迁移。");
+    for (const element of [item.node, node]) {
+      const style = attr(element, "style");
+      if (style && style !== (element === item.node ? "white-space:pre;overflow-x:auto" : "display:block;white-space:pre;padding:0;background:transparent;font-family:monospace")) throw new Error("代码容器含未知样式，未迁移。");
+    }
+    return { from: item.from, to: item.to, code, lang, ranges: styleRanges(flat.styles), positions: flat.units.map(({ from, to }) => ({ from, to })) };
+  });
+}
 
 /** 只重建文本叶节点；容器、列表号、格式标记和链接目的地址继续使用原始源码。 */
 export function applyMarkdownColor(text: string, from: number, to: number, property?: ColorProperty, color?: string, legacyRanges: readonly ColorRange[] = []): PortableColorEdit {
@@ -66,7 +88,7 @@ export function migrateMarkdownColors(text: string, ranges: readonly ColorRange[
 }
 
 /** 先在内存去掉自有颜色壳，格式标记写到壳外；只有最终文档交给一次编辑事务。 */
-export function formatMarkdownSelection(text: string, from: number, to: number, format: Format, legacyRanges: readonly ColorRange[] = []): PortableColorEdit {
+export function formatMarkdownSelection(text: string, from: number, to: number, format: Format, legacyRanges: readonly ColorRange[] = [], native = false): PortableColorEdit {
   checkSelection(text, from, to);
   const decoded = decodeOwnedColors(text);
   let start = decoded.map(from, 1), end = decoded.map(to, -1);
@@ -99,7 +121,7 @@ export function formatMarkdownSelection(text: string, from: number, to: number, 
     edits.push({ from: editFrom, to: editTo, ...replacement });
     // 自有 HTML code 的颜色只在该岛内，转正文时补入映射后的全局颜色。
     const local = styleRanges(leaf.styles).map((range) => ({ ...range, from: leaf.units[range.from].from, to: leaf.units[range.to - 1].to }));
-    colors.push(...local);
+    if (leaf.owned) colors.push(...local);
     start = editFrom; end = editTo;
   } else {
     const paragraph = findParagraph(model.ast, start, end);
@@ -122,7 +144,7 @@ export function formatMarkdownSelection(text: string, from: number, to: number, 
   }
   const changed = editText(decoded.text, edits);
   const next = buildModel(changed.text, mapRanges(colors, changed.map));
-  const result = finish(changed.text, next, changed.map(start, 1), changed.map(end, -1), false);
+  const result = native ? { text: changed.text, from: changed.map(start, 1), to: changed.map(end, -1), ranges: mapRanges(colors, changed.map) } : finish(changed.text, next, changed.map(start, 1), changed.map(end, -1), false);
   if (containerSignature(model.ast) !== containerSignature(next.ast) || visibleSignature(model) !== visibleSignature(next)) throw new Error("格式操作将改变正文结构或代码文字，已停止。");
   return result;
 }
@@ -241,8 +263,9 @@ function decodeOwnedColors(text: string): Decoded {
   return { text: changed.text, colors: mergeRanges(ranges), map: changed.map };
 }
 
-function buildModel(text: string, colors: readonly ColorRange[]): Model {
+function buildModel(text: string, colors: readonly ColorRange[], isolateInvalidCode = false): Model {
   const ast = parseMarkdown(text), html = parseOwned(text, ast), leaves: Leaf[] = [];
+  const invalidCode: Array<{ from: number; to: number; kind: string }> = [];
   const codeIslands = html.owned.filter((item) => item.code);
   for (const island of codeIslands) {
     const flat = flattenHtml(text, island);
@@ -260,7 +283,13 @@ function buildModel(text: string, colors: readonly ColorRange[]): Model {
     if (node.type === "text") units = markdownTextUnits(text, node);
     else if (node.type === "inlineCode") units = inlineCodeUnits(text, node);
     else {
-      units = blockCodeUnits(text, node);
+      try { units = blockCodeUnits(text, node); }
+      catch (error) {
+        if (!isolateInvalidCode) throw error;
+        // 只读扫描把未完成代码限定在其 AST 边界内；前面的精确颜色记录仍可使用。
+        // 保留空 code leaf 以排除该区域内的扩展语法，再将整块标为不可编辑。
+        units = []; invalidCode.push({ ...bounds, kind: "invalid code block" });
+      }
       if (!/^(`{3,}|~{3,})/.test(text.slice(bounds.from, bounds.to))) {
         // 缩进代码的 node.end 不含末尾物理换行；该换行既属于代码，也承担块后的分隔。
         physicalSuffix = /^(?:\r\n|\r|\n)/.exec(text.slice(bounds.to))?.[0] ?? "";
@@ -272,7 +301,7 @@ function buildModel(text: string, colors: readonly ColorRange[]): Model {
   });
   leaves.sort((a, b) => a.from - b.from);
   for (let i = 1; i < leaves.length; i++) if (leaves[i - 1].to > leaves[i].from) throw new Error("文本节点位置交叠，未改动正文。");
-  return { ast, leaves, unknownHtml: html.unknown, protected: protectedExtensions(text, leaves.filter((leaf) => leaf.code), leaves.filter((leaf) => !leaf.code)) };
+  return { ast, leaves, unknownHtml: html.unknown, protected: [...protectedExtensions(text, leaves.filter((leaf) => leaf.code), leaves.filter((leaf) => !leaf.code)), ...invalidCode] };
 }
 
 function lexText(raw: string, base: number, markdown: boolean): Unit[] {
@@ -508,12 +537,17 @@ function rejectUnknown(model: Model, from: number, to: number): void {
   if (protectedRange) throw new Error(`选区包含尚不支持着色的${protectedRange.kind}扩展语法，未改动正文。`);
 }
 
-function frontmatterEnd(text: string): number {
+export function frontmatterEnd(text: string): number {
   // 仅文档第一行开启 YAML；未闭合时保护至全文末尾，不猜测属性范围。
   const yamlOpen = /^(?:\uFEFF)?---[ \t]*(?:\r\n|\r|\n|$)/.exec(text);
   if (!yamlOpen) return 0;
   const close = /^(?:---|\.\.\.)[ \t]*(?:\r\n|\r|\n|$)/m.exec(text.slice(yamlOpen[0].length));
   return close ? yamlOpen[0].length + close.index + close[0].length : text.length;
+}
+
+/** 共用扩展语法边界，避免原生代码颜色绕过 YAML、注释、公式和高亮保护。 */
+export function markdownProtectedRanges(text: string): Array<{ from: number; to: number; kind: string }> {
+  return buildModel(text, [], true).protected;
 }
 
 /** 仅作为已完整解析文档上的安全护栏，不尝试把未知 Obsidian 扩展当作普通文本重写。 */
@@ -573,8 +607,99 @@ function findExactFormat(node: MdNode, from: number, to: number, wanted: string)
   let result: MdNode | null = null;
   walkMd(node, (candidate) => {
     if (candidate.type !== wanted || !candidate.children?.length) return;
-    const outer = position(candidate), innerFrom = position(candidate.children[0]).from, innerTo = position(candidate.children[candidate.children.length - 1]).to;
+    const outer = position(candidate);
+    // 选中文字通常不含嵌套格式符。只穿透透明格式层判断是否完整选中，不能穿透链接/代码。
+    // 真正移除时仍用调用方的直接子节点边界，保留另外一层加粗/斜体及其颜色。
+    let first = candidate.children[0], last = candidate.children[candidate.children.length - 1];
+    while (["strong", "emphasis", "delete"].includes(first.type) && first.children?.length) first = first.children[0];
+    while (["strong", "emphasis", "delete"].includes(last.type) && last.children?.length) last = last.children[last.children.length - 1];
+    const innerFrom = position(first).from, innerTo = position(last).to;
     if (from >= outer.from && from <= innerFrom && to >= innerTo && to <= outer.to) result = candidate;
   });
   return result;
+}
+
+/** 原生正文只接受已知 Markdown 容器；返回文字单元，列表号、链接地址和格式符不参与着色。 */
+export function nativeTextBlocks(text: string): Array<{ from: number; to: number; line: number; kind: string; structure: string; supported: boolean; units: Array<{ from: number; to: number }> }> {
+  const ast = parseMarkdown(text), model = buildModel(text, [], true);
+  const allowed = new Set(["paragraph", "heading", "list", "listItem", "text", "inlineCode", "strong", "emphasis", "delete", "link", "break"]);
+  return (ast.children ?? []).filter((node) => ["paragraph", "heading", "list"].includes(node.type)).map((node) => {
+    const { from, to } = position(node); let supported = true;
+    const shape: unknown[] = [];
+    walkMd(node, (child) => shape.push([child.type, child.spread, child.ordered, child.start, child.depth, child.checked, child.url]));
+    walkMd(node, (child) => { if (!allowed.has(child.type)) supported = false; });
+    if (model.protected.some((range) => from < range.to && to > range.from) || model.unknownHtml.some((range) => from < range.to && to > range.from)) supported = false;
+    const leaves = model.leaves.filter((leaf) => leaf.from >= from && leaf.to <= to);
+    if (leaves.some((leaf) => leaf.owned || leaf.block)) supported = false;
+    return { from, to, line: node.position!.start.line - 1, kind: node.type, structure: JSON.stringify(shape), supported, units: leaves.flatMap((leaf) => leaf.units.map(({ from, to }) => ({ from, to }))) };
+  });
+}
+
+/** 严格解码旧正文/行内代码，不猜测外部 HTML；颜色映射到恢复后的原生 Markdown 源码。 */
+export function restoreOwnedInline(text: string): { text: string; ranges: ColorRange[]; count: number; map(position: number): number } {
+  const owned = parseOwned(text, parseMarkdown(text)).owned.filter((item) => !item.block);
+  const edits: Edit[] = [], carriers: Array<{ from: number; ranges: ColorRange[] }> = [];
+  for (const item of owned) {
+    const flat = flattenHtml(text, item), value = flat.units.map((unit) => unit.value).join("");
+    if (/[\r\n]/.test(value)) throw new Error("跨行旧正文 HTML 暂不支持恢复，原文已保留。");
+    let encoded: { text: string; pairs: Pair[] };
+    if (item.code) {
+      if (item.node.attrs.some((attribute) => attribute.name !== "data-codex-code")) throw new Error("旧行内代码含未知属性，原文已保留。");
+      const delimiter = "`".repeat(Math.max(0, ...Array.from(value.matchAll(/`+/g), (match) => match[0].length)) + 1);
+      const padding = value.startsWith("`") || value.endsWith("`") || (value.startsWith(" ") && value.endsWith(" ") && value.trim()) ? " " : "";
+      const prefix = delimiter + padding;
+      encoded = { text: prefix + value + padding + delimiter, pairs: flat.units.map((unit, index) => ({ ...unit, resultFrom: prefix.length + index, resultTo: prefix.length + index + 1 })) };
+      const parsed = parseMarkdown(encoded.text), child = parsed.children?.[0]?.children?.[0];
+      if (child?.type !== "inlineCode" || child.value !== value) throw new Error("行内代码无法无损恢复，原文已保留。");
+    } else encoded = literalMarkdown(value, flat.units);
+    edits.push({ from: item.from, to: item.to, ...encoded });
+    carriers.push({ from: item.from, ranges: styleRanges(flat.styles).map((range) => ({ ...range, from: encoded.pairs[range.from].resultFrom, to: encoded.pairs[range.to - 1].resultTo })) });
+  }
+  const changed = editText(text, edits);
+  // 两个紧邻 code 的反引号可能合并为更长定界符；单岛校验不足，必须核对恢复后的整篇可见文字。
+  if (visibleSignature(buildModel(decodeOwnedColors(text).text, [])) !== visibleSignature(buildModel(changed.text, []))) throw new Error("旧行内 HTML 恢复将改变可见文字，原文已保留。");
+  // editText.map 是“可见文字边界”映射：code 开头会越过反引号，相邻岛的边界还会关联前一岛。
+  // 颜色的局部 offset 已包含原生定界符，因此这里必须使用替换片段的真实起点，不能再次套文字边界。
+  let shift = 0;
+  const ranges: ColorRange[] = [];
+  for (let index = 0; index < edits.length; index++) {
+    const edit = edits[index], offset = edit.from + shift;
+    ranges.push(...carriers[index].ranges.map((range) => ({ ...range, from: range.from + offset, to: range.to + offset })));
+    shift += edit.text.length - (edit.to - edit.from);
+  }
+  return { text: changed.text, count: edits.length, ranges: mergeRanges(ranges), map: (position) => changed.map(position, 1) };
+}
+
+
+/** 重置只定位顶层独立 HTML 注释，代码、YAML 和引用内相同文字不属于颜色存储。 */
+export function nativeTextMetadataRecords(text: string): Array<{ from: number; to: number }> {
+  const ast = parseMarkdown(text), protectedRanges = markdownProtectedRanges(text);
+  return (ast.children ?? []).filter((node) => node.type === "html").flatMap((node) => {
+    const { from, to: nodeTo } = position(node), raw = text.slice(from, nodeTo);
+    if (!raw.startsWith("<!-- noteglow-text-colors:") || protectedRanges.some((range) => from < range.to && nodeTo > range.from)) return [];
+    // 缺少结束符时 HTML 解析器可能吞入后文；重置只移除已确认自有前缀的第一物理行。
+    const lineEnd = raw.search(/[\r\n]/), to = from + (lineEnd < 0 ? raw.length : lineEnd);
+    const physicalLine = text.slice(from).split(/[\r\n]/, 1)[0], close = physicalLine.indexOf("-->");
+    // 注释结束后的文字属于正文；记录损坏不能成为删除整行正文的依据。
+    if (close >= 0 && physicalLine.slice(close + 3).trim()) throw new Error("颜色记录后含正文，未重置；请先将正文移到独立行。");
+    const prefix = /(?:\r\n|\n){2}$/.exec(text.slice(0, from));
+    return [{ from: from - (prefix?.[0].length ?? 0), to }];
+  });
+}
+
+
+/** 插入记录前后核对实际 Markdown 树；只忽略自有独立记录，保留列表 spread 等语义字段。 */
+export function nativeTextDocumentShape(text: string): string {
+  const clean = (node: MdNode): unknown => {
+    const { position: _position, children, ...fields } = node;
+    return { ...fields, ...(children ? { children: children.filter((child) => !(child.type === "html" && /^<!-- noteglow-text-colors:/.test(child.value ?? ""))).map(clean) } : {}) };
+  };
+  return JSON.stringify(clean(parseMarkdown(text)));
+}
+
+
+/** 阅读投影复用实体/行内代码解析单元，避免把 Setext 下划线或 &amp; 源码当成可见文字。 */
+export function projectNativeMarkdown(text: string, base = 0): { text: string; offsets: number[] } {
+  const model = buildModel(text, []), units = model.leaves.filter((leaf) => !leaf.owned).flatMap((leaf) => leaf.units);
+  return { text: units.map((unit) => unit.value).join(""), offsets: units.map((unit) => base + unit.from) };
 }

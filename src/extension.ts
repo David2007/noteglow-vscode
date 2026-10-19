@@ -8,14 +8,17 @@ import { ChatStore, emptyState } from "./state.ts";
 import { readState, writeState } from "./disk.ts";
 import { CodexClient } from "./codex-client.ts";
 import { readModels, type CodexModel } from "./models.ts";
-import { capture, editSnapshot, type SelectionSnapshot } from "./editor.ts";
+import { capture, editSnapshot, restoreNative, type SelectionSnapshot } from "./editor.ts";
 import { chooseRoot, verifyRoot, verifyFile } from "./workspaces.ts";
 import { normalizeColor, type ColorProperty } from "./color-ranges.ts";
 import { ChatView } from "./view.ts";
 import type { ViewMessage } from "./security.ts";
+import { registerNativeDecorations } from "./native-decorations.ts";
+import { extendMarkdownIt } from "./native-preview.ts";
 let client: CodexClient | undefined;
 let stopActive: (() => void) | undefined;
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(context: vscode.ExtensionContext): Promise<{ extendMarkdownIt: typeof extendMarkdownIt }> {
+  context.subscriptions.push(registerNativeDecorations());
   const directory = context.storageUri?.scheme === "file" ? join(context.storageUri.fsPath, "sessions") : undefined;
   let state = emptyState(), storageError = "";
   try { if(directory) state = await readState(directory); } catch(e) { storageError = (e as Error).message; void vscode.window.showErrorMessage(storageError); }
@@ -145,6 +148,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }));
   command("addSelection",()=>attach(false)); command("addFile",()=>attach(true));
   for(const action of ["bold","italic","code","foreground","background","chooseForeground","chooseBackground","clearColor"]) command(action,()=>format(action));
+  for (const action of ["restoreNative", "resetNativeColors"]) command(action, async () => {
+    if (context.storageUri?.scheme !== "file") throw new Error("请先打开本机文件夹，以保存原文备份。");
+    const backup = await restoreNative(vscode.window.activeTextEditor, join(context.storageUri.fsPath, "native-format-backups"), action === "resetNativeColors");
+    void vscode.window.showInformationMessage(backup ? `已完成；原文备份：${backup}` : "当前笔记没有需要处理的记录。");
+  });
   command("theme",async()=>{const settings=vscode.workspace.getConfiguration("workbench"); const current=settings.get<string>("colorTheme"); if(current!=="NoteGlow 绿豆色") await context.globalState.update("previousTheme",current); await settings.update("colorTheme","NoteGlow 绿豆色",vscode.ConfigurationTarget.Global);});
   command("restoreTheme",async()=>{const previous=context.globalState.get<string>("previousTheme"); if(!previous) throw new Error("没有记录之前的主题。"); if(vscode.workspace.getConfiguration("workbench").get("colorTheme")!=="NoteGlow 绿豆色") throw new Error("当前主题已手动改变，未覆盖您的新选择。"); await vscode.workspace.getConfiguration("workbench").update("colorTheme",previous,vscode.ConfigurationTarget.Global);});
   context.subscriptions.push(vscode.window.registerWebviewViewProvider("noteglow.chat",view));
@@ -159,5 +167,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(()=>{cancel();render();}));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e=>{if(e.affectsConfiguration("noteglow")){refreshModels();changed.fire();render();}}));
   context.subscriptions.push({dispose:cancel});
+  return { extendMarkdownIt };
 }
 export function deactivate(): void { stopActive?.(); client?.stop(); }

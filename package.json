@@ -1,7 +1,7 @@
 {
   "name": "noteglow",
   "displayName": "NoteGlow",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "David2007",
   "description": "彩色 Markdown · 图片与多选区引用 · 本机 Codex 对话",
   "engines": {
@@ -137,6 +137,16 @@
         "title": "恢复之前的主题",
         "category": "NoteGlow",
         "icon": "$(history)"
+      },
+      {
+        "command": "noteglow.restoreNative",
+        "title": "恢复当前笔记原生格式",
+        "category": "NoteGlow"
+      },
+      {
+        "command": "noteglow.resetNativeColors",
+        "title": "重置当前笔记颜色记录",
+        "category": "NoteGlow"
       }
     ],
     "viewsContainers": {
@@ -281,7 +291,8 @@
         "mac": "cmd+alt+i",
         "when": "editorLangId == markdown && editorHasSelection"
       }
-    ]
+    ],
+    "markdown.markdownItPlugins": true
   },
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
@@ -299,11 +310,13 @@
   },
   "devDependencies": {
     "@codemirror/state": "6.5.0",
+    "@types/markdown-it": "14.1.2",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.96.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
+    "markdown-it": "14.3.3",
     "typescript": "^5.7.2"
   }
 }

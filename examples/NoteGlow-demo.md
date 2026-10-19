@@ -4,13 +4,19 @@
 
 ## 把重点留在笔记里
 
-1. **<span data-codex-color="1" style="background-color:#fff88f">重点内容</span>**：保留列表与加粗。
-2. <span data-codex-color="1" style="color:#c0392b;background-color:#dbeafe">字体色与背景色</span>可以叠加。
+1. **重点内容**：保留列表与加粗。
+2. 字体色与背景色可以叠加。
 3. 选中文字，添加多段引用，在右侧向 Codex 提问。
+
+<!-- noteglow-text-colors:1 {"version":1,"source":"1. **重点内容**：保留列表与加粗。\n2. 字体色与背景色可以叠加。\n3. 选中文字，添加多段引用，在右侧向 Codex 提问。","ranges":[{"from":5,"to":9,"property":"background","color":"#fff88f"},{"from":24,"to":31,"property":"background","color":"#dbeafe"},{"from":24,"to":31,"property":"foreground","color":"#c0392b"}]} -->
 
 ## 代码也能保色
 
-<pre data-codex-code="1" style="white-space:pre;overflow-x:auto"><code data-codex-lang="go" style="display:block;white-space:pre;padding:0;background:transparent;font-family:monospace">message := "NoteGlow"&#10;<span data-codex-color="1" style="background-color:#dbeafe">fmt.Println(message)</span>&#10;</code></pre>
+```go
+message := "NoteGlow"
+fmt.Println(message)
+```
+<!-- noteglow-code-colors:1 {"version":1,"code":"message := \"NoteGlow\"\nfmt.Println(message)\n","ranges":[{"from":22,"to":42,"property":"background","color":"#dbeafe"}],"addedSeparator":false} -->
 
 ## 一起学习
 

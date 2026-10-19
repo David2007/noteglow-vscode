@@ -7,7 +7,8 @@ const profile=await mkdtemp(join(tmpdir(),'noteglow-host-profile-'));
 const workspace=await mkdtemp(join(tmpdir(),'noteglow-host-'));
 await writeFile(join(workspace,'demo.md'),'1. **重要** 正文。\n\n```js\nconst a = 1;\n```\n');
 await writeFile(join(workspace,'bom.md'),'\ufeffBOM 正文');
-// 仅使用合成代码，验证已着色 HTML 的后续选区，不读取私人笔记。
+// 仅使用合成代码，验证原生代码的连续选区，不读取私人笔记。
 await writeFile(join(workspace,'code-colors.md'),'```go\nupdate(a)\nupdatePtr(&a) // &amp; 😀\n\n```\n');
+await writeFile(join(workspace,'legacy.md'),'<span data-codex-color="1" style="background-color:#fff88f">重要</span> 正文。\n');
 await writeFile(join(workspace,'image.png'),png());
 await runTests({extensionTestsEnv:{NOTEGLOW_TEST_PROFILE:profile},extensionDevelopmentPath:fileURLToPath(new URL('..',import.meta.url)),extensionTestsPath:fileURLToPath(new URL('../tests/integration/index.cjs',import.meta.url)),launchArgs:[workspace,'--user-data-dir',profile,'--disable-workspace-trust','--skip-welcome','--skip-release-notes','--disable-extensions']});
