@@ -1,7 +1,7 @@
 {
   "name": "noteglow",
   "displayName": "NoteGlow",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "David2007",
   "description": "彩色 Markdown · 图片与多选区引用 · 本机 Codex 对话",
   "engines": {
@@ -165,6 +165,16 @@
           "name": "彩色笔记 · Codex",
           "type": "webview"
         }
+      ],
+      "explorer": [
+        {
+          "id": "noteglow.outline",
+          "name": "NoteGlow 目录",
+          "when": "resourceLangId == markdown",
+          "visibility": "visible",
+          "initialSize": 180,
+          "order": -100
+        }
       ]
     },
     "themes": [
@@ -292,7 +302,13 @@
         "when": "editorLangId == markdown && editorHasSelection"
       }
     ],
-    "markdown.markdownItPlugins": true
+    "markdown.markdownItPlugins": true,
+    "markdown.previewScripts": [
+      "./dist/outline-preview.js"
+    ],
+    "markdown.previewStyles": [
+      "./media/outline.css"
+    ]
   },
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
@@ -316,6 +332,7 @@
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
+    "linkedom": "0.18.12",
     "markdown-it": "14.3.3",
     "typescript": "^5.7.2"
   }

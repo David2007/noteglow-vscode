@@ -1,0 +1,15 @@
+/* 预留窄栏，正文与目录互不覆盖；只使用 VS Code 主题色。 */
+body.noteglow-has-outline { padding-left: min(206px, 32vw); }
+.noteglow-outline { position: fixed; z-index: 10; top: 12px; left: 8px; width: min(180px, 28vw); max-height: 40vh; display: flex; flex-direction: column; color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); border: 1px solid var(--vscode-widget-border, transparent); border-radius: 5px; font: 12px/28px var(--vscode-font-family); }
+.noteglow-outline.is-collapsed { width: 28px; }
+.noteglow-outline button { color: inherit; background: transparent; border: 0; cursor: pointer; font: inherit; padding: 0; }
+.noteglow-outline button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.noteglow-outline-toggle { text-align: left; min-height: 28px; padding-left: 6px !important; }
+.noteglow-outline-list { position: relative; overflow: auto; min-height: 0; padding: 0 3px; }
+.noteglow-outline-list[hidden] { display: none; }
+.noteglow-outline-row { display: flex; min-width: 0; height: 28px; }
+.noteglow-outline-arrow { width: 16px; flex: 0 0 16px; }
+.noteglow-outline-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border-left: 2px solid transparent !important; padding-left: 3px !important; }
+.noteglow-outline-title[aria-current="location"] { background: var(--vscode-list-inactiveSelectionBackground); border-left-color: var(--vscode-focusBorder) !important; }
+.noteglow-outline-title:hover { background: var(--vscode-list-hoverBackground); }
+.markdown-body :is(h1,h2,h3,h4,h5,h6) { scroll-margin-top: 16px; }

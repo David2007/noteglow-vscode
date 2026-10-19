@@ -21,3 +21,8 @@ export function reset(){notices.length=0;renders.length=0;registered.clear();wor
 
 export class Disposable {constructor(fn){this.fn=fn;}dispose(){this.fn();}}
 export const DecorationRangeBehavior={ClosedClosed:1};
+
+window.createTreeView=()=>({visible:false,onDidChangeVisibility:()=>({dispose(){}}),dispose(){}});
+window.onDidChangeActiveTextEditor=()=>({dispose(){}});
+
+window.onDidChangeTextEditorVisibleRanges=()=>({dispose(){}});

@@ -15,10 +15,11 @@ import { ChatView } from "./view.ts";
 import type { ViewMessage } from "./security.ts";
 import { registerNativeDecorations } from "./native-decorations.ts";
 import { extendMarkdownIt } from "./native-preview.ts";
+import { registerOutline } from "./outline-tree.ts";
 let client: CodexClient | undefined;
 let stopActive: (() => void) | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<{ extendMarkdownIt: typeof extendMarkdownIt }> {
-  context.subscriptions.push(registerNativeDecorations());
+  context.subscriptions.push(registerNativeDecorations(), registerOutline(context));
   const directory = context.storageUri?.scheme === "file" ? join(context.storageUri.fsPath, "sessions") : undefined;
   let state = emptyState(), storageError = "";
   try { if(directory) state = await readState(directory); } catch(e) { storageError = (e as Error).message; void vscode.window.showErrorMessage(storageError); }

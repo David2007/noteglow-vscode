@@ -8,7 +8,7 @@ exports.run=async()=>{
  const painted=doc.getText();await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),'1. **重要** 正文。\n\n```js\nconst a = 1;\n```\n');await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),painted);
  await vscode.commands.executeCommand('markdown.api.reloadPlugins');
  const firstHtml=await vscode.commands.executeCommand('markdown.api.render',painted);assert.match(firstHtml,/background-color:#fff88f/,'official Markdown renderer loads NoteGlow plugin');assert.match(firstHtml,/<strong>/);
- await verifyRepeatedCodeColors();await verifyRestoration();
+ await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);
  const bom=await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'bom.md'));const be=await vscode.window.showTextDocument(bom);be.selection=new vscode.Selection(bom.positionAt(0),bom.positionAt(3));await vscode.commands.executeCommand('noteglow.foreground');assert.match(bom.getText(),/noteglow-text-colors:1/);assert.equal(bom.isDirty,false);
  await vscode.commands.executeCommand('markdown.showPreviewToSide');await vscode.commands.executeCommand('noteglow.open');
  await vscode.commands.executeCommand('noteglow.addImages',[vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'image.png')]);
@@ -47,4 +47,16 @@ async function verifyRestoration(){
  const fs=require('node:fs/promises'),path=require('node:path'),root=path.join(process.env.NOTEGLOW_TEST_PROFILE,'User','workspaceStorage');const files=await fs.readdir(root,{recursive:true});const backups=files.filter(name=>name.includes('native-format-backups')&&name.endsWith('.md'));assert.ok(backups.length);assert.ok((await Promise.all(backups.map(name=>fs.readFile(path.join(root,name),'utf8')))).includes(before),'backup preserves original bytes');
  await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),before);await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),native);await doc.save();
  await vscode.commands.executeCommand('noteglow.resetNativeColors');assert.equal(doc.getText(),'重要 正文。\n');await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),native);await doc.save();
+}
+
+// 原生 TreeView 的公开导航命令定位重名标题，且不得修改源文件。
+async function verifyOutline(extension) {
+ const doc=await vscode.workspace.openTextDocument({language:'markdown',content:'# Same\n\n## Same\n\n```md\n# hidden\n```\n'});
+ const editor=await vscode.window.showTextDocument(doc);const before=doc.getText();
+ await vscode.commands.executeCommand('noteglow.outline.jump',doc.uri,2,editor.viewColumn);
+ assert.equal(vscode.window.activeTextEditor.document.uri.toString(),doc.uri.toString());assert.equal(vscode.window.activeTextEditor.selection.active.line,2);assert.equal(doc.getText(),before);
+ const contributions=extension.packageJSON.contributes;
+ assert.equal(contributions.views.explorer.find(v=>v.id==='noteglow.outline').visibility,'visible');
+ for(const asset of [...contributions['markdown.previewScripts'],...contributions['markdown.previewStyles']])assert.ok((await vscode.workspace.fs.stat(vscode.Uri.joinPath(extension.extensionUri,asset))).size>0,'packaged preview asset exists');
+ await vscode.commands.executeCommand('markdown.showPreviewToSide');
 }
