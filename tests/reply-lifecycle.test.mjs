@@ -11,7 +11,7 @@ test('webview Copy bypasses blocked operations and Apply resolves stored code at
  const doc={uri:new api.Uri(join(directory,'note.md')),languageId:'markdown',version:1,isClosed:false,getText:()=>note,positionAt:offset=>({line:0,character:offset}),offsetAt:p=>p.character};
  const editor={document:doc,selection,selections:[selection],async edit(fn){fn({insert:(position,text)=>{note=note.slice(0,position.character)+text+note.slice(position.character);doc.version++;}});return true;}};
  api.window.activeTextEditor=editor;api.window.visibleTextEditors=[editor];const warning=api.window.showWarningMessage;api.window.showWarningMessage=()=>new Promise(resolve=>release=resolve);
- const context={storageUri:new api.Uri(storage),extensionUri:new api.Uri(directory),subscriptions:[],globalState:{get(){},async update(){}}};
+ const context={storageUri:new api.Uri(storage),extensionUri:new api.Uri(directory),subscriptions:[],workspaceState:{get:(_key,fallback)=>fallback,async update(){}},globalState:{get(){},async update(){}}};
  try{
   await activate(context);api.resolveView(context.extensionUri);await api.receive({type:'ready'});
   const blocked=api.receive({type:'delete',conversationId:'a',id:'a'});await new Promise(r=>setImmediate(r));assert.ok(release);
