@@ -21,7 +21,7 @@ export class ChatView implements vscode.WebviewViewProvider {
       catch(e) {
         const error = e instanceof Error ? e.message : "NoteGlow 操作失败。";
         const identity = !parsed ? requestIdentity(value) : undefined;
-        if (identity) this.post({ type: value.type === "images" ? "imageImportResult" : "sendResult", ...identity, ok:false, error });
+        if (identity) this.post({ type: value.type === "images" ? "imageImportResult" : value.type === "send" ? "sendResult" : "replyActionResult", ...identity, ok:false, error });
         void vscode.window.showErrorMessage(error);
       }
     });

@@ -61,3 +61,18 @@ export async function restoreNative(editor: vscode.TextEditor | undefined, direc
   await commitSnapshot(snapshot, { text: result.text, from: mapped(snapshot.from), to: mapped(snapshot.to) });
   return backup;
 }
+
+export interface InsertionSnapshot { editor: vscode.TextEditor; uri: string; version: number; text: string; offset: number }
+/** 在点击消息到达宿主时抓取活动端点；空选区可插入，有选区也绝不替换选中文字。 */
+export function captureInsertion(editor: vscode.TextEditor | undefined): InsertionSnapshot {
+  if (!editor || !vscode.window.visibleTextEditors.includes(editor) || editor.document.isClosed || editor.document.languageId !== "markdown" || editor.document.uri.scheme !== "file") throw new Error("请先在本机 Markdown 笔记中放置插入光标。");
+  if (editor.selections.length !== 1) throw new Error("请保留一个光标后再应用代码。");
+  return { editor, uri: editor.document.uri.toString(), version: editor.document.version, text: editor.document.getText(), offset: editor.document.offsetAt(editor.selection.active) };
+}
+export async function insertAtSnapshot(snapshot: InsertionSnapshot, code: string): Promise<void> {
+  const { editor, text, offset } = snapshot, doc = editor.document;
+  if (!vscode.window.visibleTextEditors.includes(editor) || doc.isClosed || doc.uri.toString() !== snapshot.uri || doc.version !== snapshot.version || doc.getText() !== text) throw new Error("目标笔记已变化或关闭，请重新放置光标后再试。");
+  // 一次原生插入，不调用 save、不替换选区，也不在 await 后重定向到其他编辑器。
+  const accepted = await editor.edit(builder => builder.insert(doc.positionAt(offset), code), { undoStopBefore: true, undoStopAfter: true });
+  if (!accepted) throw new Error("插入被编辑器拒绝，请检查笔记是否只读或已变化。");
+}

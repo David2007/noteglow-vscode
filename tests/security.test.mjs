@@ -15,3 +15,10 @@ test('path boundary rejects siblings and traversal while allowing children',()=>
 });
 
 test('image and send request identities are bounded and body rejection is acknowledged separately',()=>{assert.throws(()=>parseViewMessage({type:'send',conversationId:'c'}));assert.throws(()=>parseViewMessage({type:'send',conversationId:'c',requestId:'x'.repeat(101)}));assert.throws(()=>parseViewMessage({type:'images',conversationId:'c',requestId:'upload-1',files:[{name:'a',path:'/etc/passwd'}]}));});
+
+test('reply actions carry bounded indexes and request identity, never client code or paths',()=>{
+ const copy={type:'copyReply',conversationId:'a',requestId:'copy-1',messageIndex:0},apply={type:'applyReplyCode',conversationId:'a',requestId:'apply-1',messageIndex:499,blockIndex:1};
+ assert.deepEqual(parseViewMessage(copy),copy);assert.deepEqual(parseViewMessage(apply),apply);
+ for(const extra of [{code:'evil'},{path:'/note.md'},{messageIndex:-1},{messageIndex:500},{messageIndex:NaN},{requestId:''},{blockIndex:-1},{blockIndex:1.2}])assert.throws(()=>parseViewMessage({...apply,...extra}));
+ assert.throws(()=>parseViewMessage({...copy,blockIndex:0}));assert.throws(()=>parseViewMessage({...copy,text:'replacement'}));
+});

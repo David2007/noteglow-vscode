@@ -2,6 +2,7 @@
 const vscode = acquireVsCodeApi();
 const $ = id => document.getElementById(id);
 let active = '', busy = false, rendering = false, uploading = false, limits, uploadEpoch = 0, inputRevision = 0, pendingUpload, pendingSend;
+const replyRequests = new Map();
 const imageNodes = new Map(), imageUrls = new Map(), removeButtons = new Set();
 const observer = typeof IntersectionObserver === 'undefined' ? undefined : new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){requestImage(entry.target);observer.unobserve(entry.target);}});
 function post(type, extra = {}) { vscode.postMessage(type === 'ready' ? {type} : {type, conversationId: active, ...extra}); }
@@ -36,6 +37,36 @@ function imageCard(image,removable){
   if(removable){const remove=document.createElement('button');remove.textContent='×';remove.title='移除图片';removeButtons.add(remove);remove.disabled=busy||uploading;remove.onclick=()=>post('removeImage',{id:image.id});card.append(remove);}
   return card;
 }
+function replyButton(type, messageIndex, blockIndex) {
+  const button=document.createElement('button');button.className='reply-action';
+  button.textContent=type==='copyReply'?'Copy':'Apply';
+  button.title=type==='copyReply'?'复制整条原始 Markdown 回复':'在上次 Markdown 光标位置插入代码，不替换选区';
+  const conversationId=active;
+  const key=`${conversationId}:${type}:${messageIndex}:${blockIndex??''}`;
+  const pending=Array.from(replyRequests.values()).find(request=>request.key===key);
+  button.disabled=!!pending;if(pending)pending.button=button;
+  button.onclick=()=>{
+    // 事件必须仍属于当前显示的回复；切换会话或重绘后旧按钮不能触发宿主操作。
+    if(button.disabled||!button.isConnected||active!==conversationId)return;
+    const requestId=crypto.randomUUID();button.disabled=true;
+    replyRequests.set(requestId,{conversationId,key,type,button});
+    post(type,{conversationId,requestId,messageIndex,...(blockIndex===undefined?{}:{blockIndex})});
+  };
+  return button;
+}
+function replyBody(message,messageIndex,article) {
+  const header=document.createElement('div');header.className='reply-heading';
+  const label=document.createElement('strong');label.textContent=message.role==='user'?'我':'Codex';header.append(label);
+  if(message.role==='assistant')header.append(replyButton('copyReply',messageIndex));article.append(header);
+  const parts=message.role==='assistant'&&Array.isArray(message.parts)?message.parts:[{type:'text',text:message.text}];
+  for(const part of parts){
+    if(part.type==='code'){
+      const block=document.createElement('section'),tools=document.createElement('div'),language=document.createElement('span'),pre=document.createElement('pre'),code=document.createElement('code');
+      block.className='reply-code';tools.className='reply-code-tools';language.textContent=part.language||'代码';
+      tools.append(language,replyButton('applyReplyCode',messageIndex,part.blockIndex));code.textContent=part.text;pre.append(code);block.append(tools,pre);article.append(block);
+    }else{const text=document.createElement('pre');text.textContent=part.text;article.append(text);}
+  }
+}
 function asBase64(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(Error('图片读取失败，请重新选择。'));reader.onload=()=>{const value=String(reader.result),comma=value.indexOf(',');if(comma<0)reject(Error('图片编码失败。'));else resolve(value.slice(comma+1));};reader.readAsDataURL(file);});}
 async function upload(files){
   if(busy||uploading||pendingSend||!active||!limits)return;
@@ -56,6 +87,12 @@ document.body.addEventListener('dragover',event=>{if(Array.from(event.dataTransf
 document.body.addEventListener('drop',event=>{const files=Array.from(event.dataTransfer?.files??[]);if(files.length){event.preventDefault();void upload(files);}});
 window.addEventListener('message',({data:s})=>{
   if(!s)return;
+  if(s.type==='replyActionResult'){
+    const pending=replyRequests.get(s.requestId);if(!pending||pending.conversationId!==s.conversationId)return;
+    replyRequests.delete(s.requestId);pending.button.disabled=false;
+    if(active===s.conversationId)$('status').textContent=s.ok?(pending.type==='copyReply'?'已复制完整回复':'已插入代码'):s.error||'回复操作失败。';
+    return;
+  }
   if(s.type==='imageImportResult'){
     if(!pendingUpload||s.requestId!==pendingUpload.requestId||s.conversationId!==pendingUpload.conversationId||active!==s.conversationId)return;
     pendingUpload=undefined;uploading=false;if(!s.ok)$('status').textContent=s.error||'图片添加失败。';controls();return;
@@ -76,7 +113,7 @@ window.addEventListener('message',({data:s})=>{
   }
   if(s.type!=='state')return;rendering=true;limits=s.imageLimits??limits;
   const c=s.conversation,switched=(c?.id??'')!==active;
-  if(switched){uploadEpoch++;pendingUpload=undefined;uploading=false;pendingSend=undefined;inputRevision=0;}
+  if(switched){replyRequests.clear();uploadEpoch++;pendingUpload=undefined;uploading=false;pendingSend=undefined;inputRevision=0;}
   const selectedModel=switched||!c?(c?.model??''):$('model').value;
   active=c?.id??'';busy=s.busy;imageNodes.clear();removeButtons.clear();observer?.disconnect();
   $('conversations').replaceChildren(...s.conversations.map(c=>option(c.id,c.title)));$('conversations').value=active;
@@ -84,8 +121,8 @@ window.addEventListener('message',({data:s})=>{
   $('model').replaceChildren(option('','Codex 默认'),...s.models.map(m=>option(m.slug,m.displayName)));
   if(selectedModel&&!s.models.some(m=>m.slug===selectedModel))$('model').append(option(selectedModel,`${selectedModel}（已保存）`));$('model').value=selectedModel;
   if(switched||!c)$('question').value=c?.draft??'';
-  $('messages').replaceChildren(...(c?.messages??[]).map(m=>{
-    const article=document.createElement('article'),label=document.createElement('strong'),body=document.createElement('pre');label.textContent=m.role==='user'?'我':'Codex';body.textContent=m.text;article.append(label,body);
+  $('messages').replaceChildren(...(c?.messages??[]).map((m,messageIndex)=>{
+    const article=document.createElement('article');replyBody(m,messageIndex,article);
     if(m.attachments?.length){const refs=document.createElement('small');refs.textContent=`引用：${m.attachments.map(a=>`${a.path}:${a.startLine??1}-${a.endLine??1}`).join('，')}`;article.append(refs);}
     if(m.images?.length){const images=document.createElement('div');images.className='history-images';images.append(...m.images.map(image=>imageCard(image,false)));article.append(images);}return article;
   }));

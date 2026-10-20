@@ -8,7 +8,7 @@ exports.run=async()=>{
  const painted=doc.getText();await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),'1. **重要** 正文。\n\n```js\nconst a = 1;\n```\n');await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),painted);
  await vscode.commands.executeCommand('markdown.api.reloadPlugins');
  const firstHtml=await vscode.commands.executeCommand('markdown.api.render',painted);assert.match(firstHtml,/background-color:#fff88f/,'official Markdown renderer loads NoteGlow plugin');assert.match(firstHtml,/<strong>/);
- await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);await verifyShortcuts(extension);await verifyMetadataFolding();
+ await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);await verifyShortcuts(extension);await verifyMetadataFolding();await verifyReplyActions();
  const bom=await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'bom.md'));const be=await vscode.window.showTextDocument(bom);be.selection=new vscode.Selection(bom.positionAt(0),bom.positionAt(3));await vscode.commands.executeCommand('noteglow.foreground');assert.match(bom.getText(),/noteglow-text-colors:1/);assert.equal(bom.isDirty,false);
  await vscode.commands.executeCommand('markdown.showPreviewToSide');await vscode.commands.executeCommand('noteglow.open');
  await vscode.commands.executeCommand('noteglow.addImages',[vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'image.png')]);
@@ -122,4 +122,17 @@ async function verifyMetadataFolding() {
  const marker=doc.getText().indexOf('noteglow-code-colors:1');await editor.edit(builder=>builder.replace(new vscode.Range(doc.positionAt(marker),doc.positionAt(marker+'noteglow-code-colors:1'.length)),'noteglow-code-colors:9'));
  await wait(async()=>{ranges=await vscode.commands.executeCommand('vscode.executeFoldingRangeProvider',uri);return !ranges.some(r=>r.start===metadataLine-1)&&visible(metadataLine);});
  assert.ok(ranges.some(r=>r.start===2&&r.end===metadataLine-1),'invalid record restores original code folding');
+}
+
+async function verifyReplyActions() {
+ const {performReplyAction,captureInsertion,insertAtSnapshot}=require(process.env.NOTEGLOW_REPLY_ADAPTER);
+ const uri=vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'reply-apply.md');
+ await vscode.workspace.fs.writeFile(uri,Buffer.from('Alpha Beta'));const doc=await vscode.workspace.openTextDocument(uri),editor=await vscode.window.showTextDocument(doc);
+ editor.selection=new vscode.Selection(0,0,0,5);
+ const reply='# Full reply\n\n~~~js\nCODE\n~~~\n\nEnd **bold**',state={activeId:'reply',conversations:[{id:'reply',messages:[{role:'assistant',text:reply}]}]};
+ await performReplyAction(state,{type:'applyReplyCode',conversationId:'reply',requestId:'apply',messageIndex:0,blockIndex:0},editor);
+ assert.equal(doc.getText(),'AlphaCODE Beta','Apply preserves selected text and inserts only code content');
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),'Alpha Beta','one native Undo reverses Apply');await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),'AlphaCODE Beta');
+ const snapshot=captureInsertion(editor);await editor.edit(builder=>builder.insert(new vscode.Position(0,0),'X'));const changed=doc.getText();await assert.rejects(insertAtSnapshot(snapshot,'UNSAFE'),/已变化/);assert.equal(doc.getText(),changed);
+ const clipboard=await vscode.env.clipboard.readText();try{await performReplyAction(state,{type:'copyReply',conversationId:'reply',requestId:'copy',messageIndex:0},undefined);assert.equal(await vscode.env.clipboard.readText(),reply,'whole original Markdown copied through native clipboard');}finally{await vscode.env.clipboard.writeText(clipboard);}
 }

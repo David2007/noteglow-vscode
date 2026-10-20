@@ -2,9 +2,10 @@ import {randomUUID} from 'node:crypto';
 import test from 'node:test';import assert from 'node:assert/strict';import vm from 'node:vm';import {readFile} from 'node:fs/promises';
 async function webview(options={}){
  const elements=new Map(),sent=[],readers=[];let onMessage;
- function element(tag='div'){return {tag,value:'',textContent:'',children:[],disabled:false,dataset:{},addEventListener(type,fn){this[type]=fn;},replaceChildren(...nodes){this.children=nodes;if(this.tag==='select')this.value=nodes[0]?.value??'';},append(...nodes){this.children.push(...nodes);}};}
+ function element(tag='div'){return {tag,value:'',textContent:'',children:[],parent:null,root:false,get isConnected(){return this.root||!!this.parent?.isConnected;},disabled:false,dataset:{},addEventListener(type,fn){this[type]=fn;},replaceChildren(...nodes){for(const node of this.children)node.parent=null;this.children=[];this.append(...nodes);if(this.tag==='select')this.value=nodes[0]?.value??'';},append(...nodes){for(const node of nodes)node.parent=this;this.children.push(...nodes);}};}
  for(const id of ['question','model','new','conversations','delete','stop','send','root','messages','attachments','status','permission','foreground','background','images','image-count','add-images'])elements.set(id,element(['model','conversations'].includes(id)?'select':'div'));
- const body=element();const document={body,getElementById:id=>elements.get(id),createElement:element,querySelectorAll:()=>[]};
+ for(const node of elements.values())node.root=true;
+ const body=element();body.root=true;const document={body,getElementById:id=>elements.get(id),createElement:element,querySelectorAll:()=>[]};
  vm.runInNewContext(await readFile(new URL('../media/main.js',import.meta.url),'utf8'),{document,crypto:{randomUUID},FileReader:class{readAsDataURL(file){this.result=`data:${file.type};base64,${file.data}`;if(options.deferRead)readers.push(()=>this.onload());else queueMicrotask(()=>this.onload());}},acquireVsCodeApi:()=>({postMessage:message=>sent.push(message)}),window:{addEventListener(_type,fn){onMessage=fn;}}});
  return {elements,sent,body,readers,message:data=>onMessage({data}),render:state=>onMessage({data:{type:'state',conversations:state.conversation?[{id:state.conversation.id,title:'test'}]:[],busy:false,colors:{foreground:'#c0392b',background:'#fff88f'},models:[{slug:'model-a',displayName:'A'},{slug:'model-b',displayName:'B'}],status:'',permission:'只读',imageLimits:{maxImages:10,maxBytes:10485760,maxTotalBytes:20971520},...state}})};
 }
@@ -28,4 +29,26 @@ test('matching upload acknowledgment immediately unlocks all current remove butt
  const buttons=[...w.elements.get('images').children.map(card=>card.children[1]),...w.elements.get('attachments').children.map(card=>card.children[1])];assert.equal(buttons.length,3);assert.ok(buttons.every(button=>button.disabled),'final state still waits for the upload acknowledgment');
  w.message({type:'imageImportResult',conversationId:'a',requestId:upload.requestId,ok:true});assert.ok(buttons.every(button=>!button.disabled),'acknowledgment updates existing buttons immediately');
  w.elements.get('send').onclick();assert.ok(buttons.every(button=>button.disabled),'pending send immediately locks picture and note removal');const send=w.sent.at(-1);w.message({type:'sendResult',conversationId:'a',requestId:send.requestId,ok:false,error:'failed'});assert.ok(buttons.every(button=>!button.disabled));
+});
+
+test('assistant Copy and code Apply stay available while busy and only send identifiers with correlated feedback',async()=>{
+ const w=await webview(),reply={role:'assistant',text:'raw full',parts:[{type:'text',text:'<script>plain</script>'},{type:'code',text:'<img onerror=evil>',language:'js',blockIndex:0}]};
+ w.render({conversation:{...c(),messages:[reply]},busy:true});let article=w.elements.get('messages').children[0],copy=article.children[0].children[1],apply=article.children[2].children[0].children[1];
+ assert.equal(copy.disabled,false);assert.equal(apply.disabled,false);assert.equal(article.children[1].textContent,'<script>plain</script>');assert.equal(article.children[2].children[1].children[0].textContent,'<img onerror=evil>');
+ copy.onclick();const request=w.sent.at(-1);assert.equal(request.type,'copyReply');assert.equal(request.messageIndex,0);assert.equal('text' in request,false);assert.equal(copy.disabled,true);
+ w.render({conversation:{...c(),messages:[reply]},busy:true});article=w.elements.get('messages').children[0];copy=article.children[0].children[1];assert.equal(copy.disabled,true);
+ w.message({type:'replyActionResult',conversationId:'a',requestId:request.requestId,ok:true});assert.equal(copy.disabled,false);assert.match(w.elements.get('status').textContent,/完整回复/);
+ apply=article.children[2].children[0].children[1];apply.onclick();const insertion=w.sent.at(-1);assert.equal(insertion.type,'applyReplyCode');assert.equal(insertion.blockIndex,0);assert.equal('code' in insertion,false);
+ w.message({type:'replyActionResult',conversationId:'a',requestId:insertion.requestId,ok:false,error:'closed'});assert.equal(apply.disabled,false);assert.equal(w.elements.get('status').textContent,'closed');
+});
+
+
+test('detached reply buttons cannot act on a different conversation or a newly rendered reply',async()=>{
+ const w=await webview(),reply={role:'assistant',text:'```js\nCODE\n```',parts:[{type:'code',text:'CODE',language:'js',blockIndex:0}]};
+ const render=id=>w.render({conversation:{...c(id),messages:[reply]}});
+ const buttons=()=>{const article=w.elements.get('messages').children[0];return [article.children[0].children[1],article.children[1].children[0].children[1]];};
+ render('a');const oldA=buttons();assert.ok(oldA.every(button=>button.isConnected));
+ render('b');let count=w.sent.length;for(const button of oldA){assert.equal(button.isConnected,false);button.onclick();}assert.equal(w.sent.length,count);
+ const oldB=buttons();render('b');count=w.sent.length;for(const button of oldB){assert.equal(button.isConnected,false);button.onclick();}assert.equal(w.sent.length,count);
+ const current=buttons();current[1].onclick();assert.equal(w.sent.at(-1).type,'applyReplyCode');assert.equal(w.sent.at(-1).conversationId,'b');
 });

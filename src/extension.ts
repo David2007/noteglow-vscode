@@ -12,7 +12,9 @@ import { capture, editSnapshot, restoreNative, type SelectionSnapshot } from "./
 import { chooseRoot, verifyRoot, verifyFile } from "./workspaces.ts";
 import { normalizeColor, type ColorProperty } from "./color-ranges.ts";
 import { ChatView } from "./view.ts";
-import type { ViewMessage } from "./security.ts";
+import { performReplyAction } from "./reply-controller.ts";
+import { replyParts, type ReplyPart } from "./reply-actions.ts";
+import type { ReplyAction, ViewMessage } from "./security.ts";
 import { registerNativeDecorations } from "./native-decorations.ts";
 import { extendMarkdownIt } from "./native-preview.ts";
 import { registerOutline } from "./outline-tree.ts";
@@ -33,6 +35,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
   const cancel = (): void => { imageEpoch++; store.cancel(runner); };
   stopActive = cancel;
   let selection: SelectionSnapshot | undefined;
+  let lastMarkdownEditor: vscode.TextEditor | undefined;
+  const rememberEditor = (editor: vscode.TextEditor | undefined) => { if (editor && editor === vscode.window.activeTextEditor && editor.document.languageId === "markdown" && editor.document.uri.scheme === "file") lastMarkdownEditor = editor; };
+  rememberEditor(vscode.window.activeTextEditor);
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(rememberEditor));
+  const replyCache = new WeakMap<object, { text: string; parts: ReplyPart[] }>();
+  const withReplyParts = (message: { role: string; text: string }) => {
+    if (message.role !== "assistant") return message;
+    let cached = replyCache.get(message);
+    if (!cached || cached.text !== message.text) { cached = { text: message.text, parts: replyParts(message.text) }; replyCache.set(message, cached); }
+    return { ...message, parts: cached.parts };
+  };
   // 仅记录本次扩展会话成功应用的操作；清除、取消及失败不覆盖上一次格式。
   let lastFormat: { action: "bold" | "italic" | "code" | ColorProperty; color?: string } | undefined;
   let models: CodexModel[] = [], modelWarning = "";
@@ -41,6 +54,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
   const config = () => vscode.workspace.getConfiguration("noteglow");
   let status = "", operations = Promise.resolve();
   const view = new ChatView(context.extensionUri, message => {
+    if (message.type === "copyReply" || message.type === "applyReplyCode") return replyAction(message);
     if(message.type === "stop") { store.assertConversation(message.conversationId); cancel(); status = store.working ? "正在停止；已执行的文件修改不会撤销。" : "已停止；已执行的文件修改不会撤销。"; render(); return Promise.resolve(); }
     if (message.type === "images") return (async () => {
       try { await imageImport(() => requiredImages().importEncoded(message.conversationId, message.files)); view.post({type:"imageImportResult",conversationId:message.conversationId,requestId:message.requestId,ok:true}); }
@@ -57,7 +71,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
       throw e;
     }); operations = pending; return pending;
   }, cache ? vscode.Uri.file(cache.directory) : undefined, cancel);
-  const render = (): void => view.post({ type: "state", imageLimits:{maxImages:MAX_IMAGES,maxBytes:MAX_IMAGE_BYTES,maxTotalBytes:MAX_IMAGE_TOTAL_BYTES}, conversations: store.state.conversations.map(c => ({ id:c.id, title:c.title })), conversation: store.current() ?? null, busy:store.working, colors:store.state.colors, models, status:status || modelWarning, permission:config().get<string>("sandboxMode", "read-only") === "workspace-write" ? "工作区写入" : "只读" });
+  const render = (): void => view.post({ type: "state", imageLimits:{maxImages:MAX_IMAGES,maxBytes:MAX_IMAGE_BYTES,maxTotalBytes:MAX_IMAGE_TOTAL_BYTES}, conversations: store.state.conversations.map(c => ({ id:c.id, title:c.title })), conversation: store.current() ? { ...store.current()!, messages: store.current()!.messages.map(withReplyParts) } : null, busy:store.working, colors:store.state.colors, models, status:status || modelWarning, permission:config().get<string>("sandboxMode", "read-only") === "workspace-write" ? "工作区写入" : "只读" });
+  async function replyAction(message: ReplyAction): Promise<void> {
+    try {
+      // 不进入发送队列：复制历史回复在 Codex 运行时仍可使用，插入目标在首次 await 前固定。
+      await performReplyAction(store.state, message, lastMarkdownEditor);
+      view.post({ type: "replyActionResult", conversationId: message.conversationId, requestId: message.requestId, ok: true });
+    } catch (error) {
+      view.post({ type: "replyActionResult", conversationId: message.conversationId, requestId: message.requestId, ok: false, error: error instanceof Error ? error.message : "回复操作失败。" });
+    }
+  }
   function requiredImages(): ImageController { if(storageError) throw new Error(storageError); if(!images || !cache) throw new Error("请先打开本机工作区以保存图片。"); return images; }
   async function imageImport(run: () => Promise<void>): Promise<void> {
     const pending = run(); render();
@@ -169,7 +192,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
   command("restoreTheme",async()=>{const previous=context.globalState.get<string>("previousTheme"); if(!previous) throw new Error("没有记录之前的主题。"); if(vscode.workspace.getConfiguration("workbench").get("colorTheme")!=="NoteGlow 绿豆色") throw new Error("当前主题已手动改变，未覆盖您的新选择。"); await vscode.workspace.getConfiguration("workbench").update("colorTheme",previous,vscode.ConfigurationTarget.Global);});
   context.subscriptions.push(vscode.window.registerWebviewViewProvider("noteglow.chat",view));
   const changed = new vscode.EventEmitter<void>(); context.subscriptions.push(changed);
-  context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(e=>{if(e.textEditor.document.languageId!=="markdown")return;try{selection=capture(e.textEditor);}catch{selection=undefined;}changed.fire();}));
+  context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(e=>{rememberEditor(e.textEditor);if(e.textEditor.document.languageId!=="markdown")return;try{selection=capture(e.textEditor);}catch{selection=undefined;}changed.fire();}));
   try{selection=capture(vscode.window.activeTextEditor);}catch{}
   context.subscriptions.push(vscode.languages.registerCodeLensProvider("markdown",{onDidChangeCodeLenses:changed.event,provideCodeLenses:doc=>{
     if(!config().get("selectionCodeLens",true)||!selection||selection.uri!==doc.uri.toString()||selection.version!==doc.version)return [];
