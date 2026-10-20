@@ -1,7 +1,7 @@
 {
   "name": "noteglow",
   "displayName": "NoteGlow",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "David2007",
   "description": "彩色 Markdown · 图片与多选区引用 · 本机 Codex 对话",
   "engines": {
@@ -152,6 +152,11 @@
         "command": "noteglow.repeatFormat",
         "title": "重复上次格式",
         "category": "NoteGlow"
+      },
+      {
+        "command": "noteglow.foldMetadata",
+        "title": "收起颜色记录",
+        "category": "NoteGlow"
       }
     ],
     "viewsContainers": {
@@ -220,6 +225,11 @@
           "type": "boolean",
           "default": true,
           "description": "Markdown 中显示当前选区格式和添加到对话入口。"
+        },
+        "noteglow.autoFoldMetadata": {
+          "type": "boolean",
+          "default": true,
+          "description": "首次打开或新建有效颜色记录时自动收起记录；不修改笔记。手动展开后本次编辑器会话不反复收起。"
         }
       }
     },

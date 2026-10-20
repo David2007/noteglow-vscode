@@ -26,3 +26,5 @@ window.createTreeView=()=>({visible:false,onDidChangeVisibility:()=>({dispose(){
 window.onDidChangeActiveTextEditor=()=>({dispose(){}});
 
 window.onDidChangeTextEditorVisibleRanges=()=>({dispose(){}});
+
+export const extensions={getExtension:()=>undefined};

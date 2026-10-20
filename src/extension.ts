@@ -16,11 +16,12 @@ import type { ViewMessage } from "./security.ts";
 import { registerNativeDecorations } from "./native-decorations.ts";
 import { extendMarkdownIt } from "./native-preview.ts";
 import { registerOutline } from "./outline-tree.ts";
+import { registerMetadataFolding } from "./native-metadata-folding.ts";
 import { registerSlashCommands } from "./slash-controller.ts";
 let client: CodexClient | undefined;
 let stopActive: (() => void) | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<{ extendMarkdownIt: typeof extendMarkdownIt }> {
-  context.subscriptions.push(registerNativeDecorations(), registerOutline(context), registerSlashCommands());
+  context.subscriptions.push(registerNativeDecorations(), registerOutline(context), registerSlashCommands(), registerMetadataFolding());
   const directory = context.storageUri?.scheme === "file" ? join(context.storageUri.fsPath, "sessions") : undefined;
   let state = emptyState(), storageError = "";
   try { if(directory) state = await readState(directory); } catch(e) { storageError = (e as Error).message; void vscode.window.showErrorMessage(storageError); }

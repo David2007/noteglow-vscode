@@ -8,14 +8,14 @@ exports.run=async()=>{
  const painted=doc.getText();await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),'1. **重要** 正文。\n\n```js\nconst a = 1;\n```\n');await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),painted);
  await vscode.commands.executeCommand('markdown.api.reloadPlugins');
  const firstHtml=await vscode.commands.executeCommand('markdown.api.render',painted);assert.match(firstHtml,/background-color:#fff88f/,'official Markdown renderer loads NoteGlow plugin');assert.match(firstHtml,/<strong>/);
- await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);await verifyShortcuts(extension);
+ await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);await verifyShortcuts(extension);await verifyMetadataFolding();
  const bom=await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'bom.md'));const be=await vscode.window.showTextDocument(bom);be.selection=new vscode.Selection(bom.positionAt(0),bom.positionAt(3));await vscode.commands.executeCommand('noteglow.foreground');assert.match(bom.getText(),/noteglow-text-colors:1/);assert.equal(bom.isDirty,false);
  await vscode.commands.executeCommand('markdown.showPreviewToSide');await vscode.commands.executeCommand('noteglow.open');
  await vscode.commands.executeCommand('noteglow.addImages',[vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'image.png')]);
  const fs=require('node:fs/promises'),path=require('node:path');const storageRoot=path.join(process.env.NOTEGLOW_TEST_PROFILE,'User','workspaceStorage');
  const entries=await fs.readdir(storageRoot,{recursive:true});const stateFile=entries.find(name=>name.endsWith(path.join('sessions','sessions-v1.json')));assert.ok(stateFile,'native image command persisted the workspace session');
  const saved=JSON.parse(await fs.readFile(path.join(storageRoot,stateFile),'utf8'));const current=saved.conversations.find(c=>c.id===saved.activeId);assert.equal(current.draftImages.length,1);assert.equal(current.draftImages[0].mime,'image/png');assert.equal(current.draftImages[0].width,24);assert.equal(JSON.stringify(current.draftImages).includes(vscode.workspace.workspaceFolders[0].uri.fsPath),false);
- console.log('NoteGlow Extension Host: activation, commands, native color, three code selections, disk save, Undo/Redo native preview and private image import passed.');
+ console.log('NoteGlow Extension Host: activation, commands, native color, three code selections, disk save, Undo/Redo, shortcuts, native metadata folding lifecycle, native preview and private image import passed.');
 };
 
 
@@ -95,4 +95,31 @@ async function verifyShortcuts(extension) {
   await vscode.commands.executeCommand('redo');assert.equal(d.getText(),expected,name+' redo');assert.equal(d.offsetAt(e.selection.active),cursor,name+' redo cursor');
   await vscode.commands.executeCommand('type',{text:'Body'});assert.equal(d.getText(),expected.slice(0,cursor)+'Body'+expected.slice(cursor),name+' body typing');
  }
+}
+
+async function verifyMetadataFolding() {
+ const uri=vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'metadata-folding.md');
+ const source='# Heading\n\n```js\nconst a = 1;\nconst b = 2;\n```\n\ntail\n';
+ await vscode.workspace.fs.writeFile(uri,Buffer.from(source));const doc=await vscode.workspace.openTextDocument(uri);let editor=await vscode.window.showTextDocument(doc);
+ const at=doc.getText().indexOf('const a');editor.selection=new vscode.Selection(doc.positionAt(at),doc.positionAt(at+5));
+ await vscode.commands.executeCommand('noteglow.foreground');const colored=doc.getText();
+ const metadataLine=doc.positionAt(colored.indexOf('<!-- noteglow-code-colors:1')).line;
+ const visible=line=>editor.visibleRanges.some(range=>range.start.line<=line&&range.end.line>=line);
+ const wait=async predicate=>{for(let i=0;i<100;i++){if(await predicate())return;await new Promise(r=>setTimeout(r,50));}assert.fail('metadata folding condition timed out');};
+ await wait(()=>!visible(metadataLine));assert.equal(doc.getText(),colored);assert.equal(doc.isDirty,false);
+ let ranges=await vscode.commands.executeCommand('vscode.executeFoldingRangeProvider',uri);
+ assert.ok(ranges.some(r=>r.start===0),'native heading fold survives');assert.ok(ranges.some(r=>r.start===2&&r.end===metadataLine-2),'body fold ends before closing fence');
+ assert.ok(ranges.some(r=>r.start===metadataLine-1&&r.end===metadataLine));assert.ok(visible(3),'default folding keeps code body visible');
+ await vscode.commands.executeCommand('editor.unfold',{selectionLines:[metadataLine-1],levels:1,direction:'down'});await wait(()=>visible(metadataLine));
+ const other=await vscode.workspace.openTextDocument({language:'plaintext',content:'other'});await vscode.window.showTextDocument(other);editor=await vscode.window.showTextDocument(doc);await new Promise(r=>setTimeout(r,300));assert.ok(visible(metadataLine),'switching tabs must respect manual unfolding');
+ await vscode.commands.executeCommand('noteglow.foldMetadata');await wait(()=>!visible(metadataLine));
+ await vscode.commands.executeCommand('editor.fold',{selectionLines:[2],levels:1,direction:'down'});await wait(()=>!visible(3));assert.ok(visible(metadataLine-1),'closing fence remains visible');
+ await vscode.commands.executeCommand('editor.unfold',{selectionLines:[2],levels:1,direction:'down'});await wait(()=>visible(3));assert.equal(visible(metadataLine),false);
+ // 程序性正文编辑也必须揭示失效记录，不把失效颜色静默隐藏。
+ const change=doc.getText().indexOf('const a');await editor.edit(builder=>builder.replace(new vscode.Range(doc.positionAt(change),doc.positionAt(change+7)),'const z'));
+ await wait(()=>visible(metadataLine));const stale=doc.getText();await new Promise(r=>setTimeout(r,200));assert.equal(doc.getText(),stale,'folding never writes the note');
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),colored);await vscode.commands.executeCommand('noteglow.foldMetadata');await wait(()=>!visible(metadataLine));
+ const marker=doc.getText().indexOf('noteglow-code-colors:1');await editor.edit(builder=>builder.replace(new vscode.Range(doc.positionAt(marker),doc.positionAt(marker+'noteglow-code-colors:1'.length)),'noteglow-code-colors:9'));
+ await wait(async()=>{ranges=await vscode.commands.executeCommand('vscode.executeFoldingRangeProvider',uri);return !ranges.some(r=>r.start===metadataLine-1)&&visible(metadataLine);});
+ assert.ok(ranges.some(r=>r.start===2&&r.end===metadataLine-1),'invalid record restores original code folding');
 }
