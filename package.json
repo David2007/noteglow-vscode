@@ -1,7 +1,7 @@
 {
   "name": "noteglow",
   "displayName": "NoteGlow",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "David2007",
   "description": "彩色 Markdown · 图片与多选区引用 · 本机 Codex 对话",
   "engines": {
@@ -146,6 +146,11 @@
       {
         "command": "noteglow.resetNativeColors",
         "title": "重置当前笔记颜色记录",
+        "category": "NoteGlow"
+      },
+      {
+        "command": "noteglow.repeatFormat",
+        "title": "重复上次格式",
         "category": "NoteGlow"
       }
     ],
@@ -299,6 +304,17 @@
         "key": "ctrl+alt+i",
         "mac": "cmd+alt+i",
         "when": "editorLangId == markdown && editorHasSelection"
+      },
+      {
+        "command": "noteglow.repeatFormat",
+        "key": "ctrl+shift+h",
+        "mac": "cmd+shift+h",
+        "when": "editorTextFocus && editorLangId == markdown && resourceScheme == file && editorHasSelection && !editorReadonly && !isComposing"
+      },
+      {
+        "command": "noteglow.expandSlash",
+        "key": "enter",
+        "when": "editorTextFocus && editorLangId == markdown && resourceScheme == file && noteglow.slashReady && !editorReadonly && !editorHasSelection && !editorHasMultipleSelections && !isComposing && !suggestWidgetVisible && !inlineSuggestionVisible && !inSnippetMode"
       }
     ],
     "markdown.markdownItPlugins": true,

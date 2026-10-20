@@ -16,10 +16,11 @@ import type { ViewMessage } from "./security.ts";
 import { registerNativeDecorations } from "./native-decorations.ts";
 import { extendMarkdownIt } from "./native-preview.ts";
 import { registerOutline } from "./outline-tree.ts";
+import { registerSlashCommands } from "./slash-controller.ts";
 let client: CodexClient | undefined;
 let stopActive: (() => void) | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<{ extendMarkdownIt: typeof extendMarkdownIt }> {
-  context.subscriptions.push(registerNativeDecorations(), registerOutline(context));
+  context.subscriptions.push(registerNativeDecorations(), registerOutline(context), registerSlashCommands());
   const directory = context.storageUri?.scheme === "file" ? join(context.storageUri.fsPath, "sessions") : undefined;
   let state = emptyState(), storageError = "";
   try { if(directory) state = await readState(directory); } catch(e) { storageError = (e as Error).message; void vscode.window.showErrorMessage(storageError); }
@@ -31,6 +32,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
   const cancel = (): void => { imageEpoch++; store.cancel(runner); };
   stopActive = cancel;
   let selection: SelectionSnapshot | undefined;
+  // 仅记录本次扩展会话成功应用的操作；清除、取消及失败不覆盖上一次格式。
+  let lastFormat: { action: "bold" | "italic" | "code" | ColorProperty; color?: string } | undefined;
   let models: CodexModel[] = [], modelWarning = "";
   const refreshModels = (): void => { try { models = readModels(); modelWarning = ""; } catch { models = []; modelWarning = "未读取到模型缓存；默认使用 Codex CLI 模型，也会保留已保存的模型。"; } };
   refreshModels();
@@ -102,6 +105,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
       }
     }
     await editSnapshot(snap, property ?? (action === "clearColor" ? "clear" : action as "bold"|"italic"|"code"), color);
+    if (action !== "clearColor") lastFormat = { action: property ?? action as "bold" | "italic" | "code", color };
     selection = capture(snap.editor);
     if(property && color) { store.assertIdle(); store.state.colors[property] = color; if(directory) await store.persist(); }
     render();
@@ -148,6 +152,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
     return pickImages(undefined, Array.isArray(resources) ? resources : undefined).catch(e => { void vscode.window.showErrorMessage((e as Error).message); });
   }));
   command("addSelection",()=>attach(false)); command("addFile",()=>attach(true));
+  command("repeatFormat", async () => {
+    if (!lastFormat) throw new Error("请先通过 NoteGlow 应用一次格式。");
+    const snap = snapshot(), format = lastFormat;
+    await editSnapshot(snap, format.action, format.color, true);
+    selection = capture(snap.editor);
+  });
   for(const action of ["bold","italic","code","foreground","background","chooseForeground","chooseBackground","clearColor"]) command(action,()=>format(action));
   for (const action of ["restoreNative", "resetNativeColors"]) command(action, async () => {
     if (context.storageUri?.scheme !== "file") throw new Error("请先打开本机文件夹，以保存原文备份。");

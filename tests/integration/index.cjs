@@ -8,7 +8,7 @@ exports.run=async()=>{
  const painted=doc.getText();await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),'1. **重要** 正文。\n\n```js\nconst a = 1;\n```\n');await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),painted);
  await vscode.commands.executeCommand('markdown.api.reloadPlugins');
  const firstHtml=await vscode.commands.executeCommand('markdown.api.render',painted);assert.match(firstHtml,/background-color:#fff88f/,'official Markdown renderer loads NoteGlow plugin');assert.match(firstHtml,/<strong>/);
- await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);
+ await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);await verifyShortcuts(extension);
  const bom=await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'bom.md'));const be=await vscode.window.showTextDocument(bom);be.selection=new vscode.Selection(bom.positionAt(0),bom.positionAt(3));await vscode.commands.executeCommand('noteglow.foreground');assert.match(bom.getText(),/noteglow-text-colors:1/);assert.equal(bom.isDirty,false);
  await vscode.commands.executeCommand('markdown.showPreviewToSide');await vscode.commands.executeCommand('noteglow.open');
  await vscode.commands.executeCommand('noteglow.addImages',[vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'image.png')]);
@@ -59,4 +59,40 @@ async function verifyOutline(extension) {
  assert.equal(contributions.views.explorer.find(v=>v.id==='noteglow.outline').visibility,'visible');
  for(const asset of [...contributions['markdown.previewScripts'],...contributions['markdown.previewStyles']])assert.ok((await vscode.workspace.fs.stat(vscode.Uri.joinPath(extension.extensionUri,asset))).size>0,'packaged preview asset exists');
  await vscode.commands.executeCommand('markdown.showPreviewToSide');
+}
+
+// 真正的 Extension Host：命令注册、磁盘保存、原生 snippet 光标及 Undo/Redo，不能用 mock 代替。
+async function verifyShortcuts(extension) {
+ const uri=vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'shortcuts.md');
+ await vscode.workspace.fs.writeFile(uri,Buffer.from('Alpha Beta Gamma Delta'));
+ const doc=await vscode.workspace.openTextDocument(uri),editor=await vscode.window.showTextDocument(doc);
+ const select=word=>{const from=doc.getText().indexOf(word);assert.ok(from>=0);editor.selection=new vscode.Selection(doc.positionAt(from),doc.positionAt(from+word.length));};
+ select('Alpha');await vscode.commands.executeCommand('noteglow.italic');
+ select('Beta');await vscode.commands.executeCommand('noteglow.repeatFormat');assert.equal(doc.getText(),'*Alpha* *Beta* Gamma Delta');
+ await vscode.commands.executeCommand('noteglow.repeatFormat');assert.equal(doc.getText(),'*Alpha* *Beta* Gamma Delta','repeat must not toggle format off');
+ select('Gamma');await vscode.commands.executeCommand('noteglow.background');
+ select('Delta');await vscode.commands.executeCommand('noteglow.repeatFormat');
+ let record=JSON.parse(doc.getText().match(/<!-- noteglow-text-colors:1 (.+) -->/)[1]);
+ assert.deepEqual(record.ranges.map(r=>record.source.slice(r.from,r.to)),['Gamma','Delta']);
+ assert.ok(record.ranges.every(r=>r.property==='background'&&r.color==='#fff88f'));
+ const beforeClear=doc.getText();await vscode.commands.executeCommand('noteglow.clearColor');
+ await vscode.commands.executeCommand('noteglow.repeatFormat');assert.equal(doc.getText(),beforeClear,'clear must not replace recent background format');
+ assert.equal(doc.isDirty,false);assert.equal(Buffer.from(await vscode.workspace.fs.readFile(uri)).toString(),doc.getText());
+ const bindings=extension.packageJSON.contributes.keybindings;
+ assert.equal(bindings.find(k=>k.command==='noteglow.repeatFormat').mac,'cmd+shift+h');
+ const enter=bindings.find(k=>k.command==='noteglow.expandSlash');assert.equal(enter.key,'enter');
+ for(const guard of ['noteglow.slashReady','!isComposing','!suggestWidgetVisible','!inlineSuggestionVisible','!inSnippetMode','!editorReadonly','!editorHasMultipleSelections'])assert.ok(enter.when.includes(guard));
+ for(const [name,source,expected,cursor] of [
+  ['code','/code','```\n\n```',4],
+  ['table','/bg','| 标题 1 | 标题 2 |\n| --- | --- |\n|  |  |\n|  |  |',2],
+  ['crlf','before\r\n/code\r\nafter','before\r\n\r\n```\r\n\r\n```\r\n\r\nafter',15]
+ ]) {
+  const u=vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,`shortcut-${name}.md`);await vscode.workspace.fs.writeFile(u,Buffer.from(source));
+  const d=await vscode.workspace.openTextDocument(u),e=await vscode.window.showTextDocument(d);const command=source.includes('/code')?'/code':'/bg',at=source.indexOf(command)+command.length;
+  e.selection=new vscode.Selection(d.positionAt(at),d.positionAt(at));
+  await vscode.commands.executeCommand('noteglow.expandSlash');assert.equal(d.getText(),expected,name);assert.equal(d.offsetAt(e.selection.active),cursor,name+' body cursor');
+  await vscode.commands.executeCommand('undo');assert.equal(d.getText(),source,name+' one undo');
+  await vscode.commands.executeCommand('redo');assert.equal(d.getText(),expected,name+' redo');assert.equal(d.offsetAt(e.selection.active),cursor,name+' redo cursor');
+  await vscode.commands.executeCommand('type',{text:'Body'});assert.equal(d.getText(),expected.slice(0,cursor)+'Body'+expected.slice(cursor),name+' body typing');
+ }
 }

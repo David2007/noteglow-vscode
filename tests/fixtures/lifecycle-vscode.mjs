@@ -8,7 +8,7 @@ export const commands={registerCommand(name,handler){registered.set(name,handler
 export const languages={registerCodeLensProvider(){return {dispose(){}};}};
 export class Uri {constructor(path){this.fsPath=path;this.scheme='file';}toString(){return `file://${this.fsPath}`;}static file(path){return new Uri(path);}static joinPath(uri,...paths){return new Uri(join(uri.fsPath,...paths));}}
 export class EventEmitter{event=()=>({dispose(){}});fire(){}dispose(){}}
-export class Range{}export class Selection{}export class CodeLens{}
+export class Range{constructor(start,end){this.start=start;this.end=end;}}export class Selection extends Range{constructor(start,end){super(start,end);this.isEmpty=start.line===end.line&&start.character===end.character;this.active=end;}}export class CodeLens{}
 export const ConfigurationTarget={Global:1};
 export function resolveView(extensionUri){
  const view={webview:{cspSource:'vscode-webview:',asWebviewUri:uri=>uri.toString(),onDidReceiveMessage(fn){receive=fn;return {dispose(){}};},postMessage(data){renders.push(structuredClone(data));for(const waiter of [...waiters])waiter(data);return Promise.resolve(true);}},onDidDispose(){return {dispose(){}};}};

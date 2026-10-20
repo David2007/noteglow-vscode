@@ -18,12 +18,12 @@ export function decodeUtf8Markdown(bytes: Uint8Array): string {
     return text;
   } catch { throw new Error("便携格式仅支持 UTF-8（可带 BOM），请先转换文件编码；正文未回滚。"); }
 }
-export async function editSnapshot(snapshot: SelectionSnapshot, action: "bold" | "italic" | "code" | "clear" | ColorProperty, color?: string): Promise<void> {
+export async function editSnapshot(snapshot: SelectionSnapshot, action: "bold" | "italic" | "code" | "clear" | ColorProperty, color?: string, applyOnly = false): Promise<void> {
   const { editor, text, from, to } = snapshot, doc = editor.document;
   // UTF-8 编码合同在写入前核验；TextDocument 会剥离 UTF-8 BOM，读回也按相同规则解码。
   decodeUtf8Markdown(await readFile(doc.uri.fsPath));
   let result: PortableColorEdit;
-  if (["bold", "italic", "code"].includes(action)) result = formatNativeText(text, from, to, action as "bold" | "italic" | "code");
+  if (["bold", "italic", "code"].includes(action)) result = formatNativeText(text, from, to, action as "bold" | "italic" | "code", applyOnly);
   else result = applyNativeCodeColor(text, from, to, action === "clear" ? undefined : action as ColorProperty, color) ?? applyNativeTextColor(text, from, to, action === "clear" ? undefined : action as ColorProperty, color);
   await commitSnapshot(snapshot, result);
 }
