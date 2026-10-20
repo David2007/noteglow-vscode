@@ -74,10 +74,13 @@ export async function insertAtSnapshot(snapshot: InsertionSnapshot, code: string
   if (!vscode.window.visibleTextEditors.includes(editor) || doc.isClosed || doc.uri.toString() !== snapshot.uri || doc.version !== snapshot.version || doc.getText() !== text) throw new Error("目标笔记已变化或关闭，请重新放置光标后再试。");
   // 编辑器会自动扩大原选区；仅在用户没有接管光标且正文仍为本次结果时收起它。
   const active = vscode.window.activeTextEditor;
+  const selectionKey = (selections: readonly vscode.Selection[]) => selections.map(s => `${s.anchor.line}:${s.anchor.character}:${s.active.line}:${s.active.character}`).join(";");
+  // selection setter 的异步事件可能晚于 Apply 到达；原选区的确认不算用户接管。
+  const initialSelection = selectionKey(editor.selections);
   let moved = false;
   const listeners = [
     vscode.window.onDidChangeActiveTextEditor(() => { moved = true; }),
-    vscode.window.onDidChangeTextEditorSelection(event => { if (event.textEditor === editor && event.kind !== undefined) moved = true; })
+    vscode.window.onDidChangeTextEditorSelection(event => { if (event.textEditor === editor && event.kind !== undefined && !(event.kind === vscode.TextEditorSelectionChangeKind.Command && selectionKey(event.selections) === initialSelection)) moved = true; })
   ];
   const inserted = code.replace(/\r?\n/g, doc.eol === 2 ? "\r\n" : "\n");
   const expected = text.slice(0, offset) + inserted + text.slice(offset);
