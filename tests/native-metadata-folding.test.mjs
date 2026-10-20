@@ -79,3 +79,24 @@ test('stale unfolding retries after a selection race during its provider query',
   api.events.selection({textEditor:e});await settle();assert.equal(api.calls.filter(c=>c[0]==='editor.unfold').length,1);assert.equal(folds().length,1);
  }finally{disposable.dispose();api.commands.executeCommand=execute;}
 });
+
+test('missing or rejected built-in Markdown activation leaves editor untouched and disposes safely',async()=>{
+ const getExtension=api.extensions.getExtension;
+ for(const mode of ['missing','rejected']){
+  api.reset();const e=editor();api.window.activeTextEditor=e;api.window.visibleTextEditors=[e];const selection=e.selections;
+  e.edit=()=>assert.fail('folding must not edit the note');
+  if(mode==='missing')api.extensions.getExtension=()=>undefined;
+  else api.activation(async()=>{throw Error('Markdown disabled');});
+  const disposable=registerMetadataFolding();
+  try{await settle();await api.handlers.get('noteglow.foldMetadata')();assert.equal(api.provider,undefined,mode);assert.equal(folds().length,0,mode);assert.equal(api.calls.some(c=>c[0]==='vscode.executeFoldingRangeProvider'),false);assert.equal(e.document.getText(),source);assert.equal(e.selections,selection);}
+  finally{disposable.dispose();api.extensions.getExtension=getExtension;}
+  assert.equal(api.handlers.size,0);assert.equal(Object.keys(api.events).length,0);
+ }
+});
+test('manual provider failure reports a warning without folding or modifying the editor',async()=>{
+ const {e,disposable}=await setup(),execute=api.commands.executeCommand,selection=e.selections,before=folds().length;
+ e.edit=()=>assert.fail('provider failure must not edit the note');
+ api.commands.executeCommand=async(name,arg)=>{if(name==='vscode.executeFoldingRangeProvider')throw Error('provider unavailable');return execute(name,arg);};
+ try{await api.handlers.get('noteglow.foldMetadata')();assert.equal(api.notices.length,1);assert.match(api.notices[0],/颜色记录暂时无法折叠/);assert.equal(folds().length,before);assert.equal(e.document.getText(),source);assert.equal(e.selections,selection);}
+ finally{disposable.dispose();api.commands.executeCommand=execute;}
+});
