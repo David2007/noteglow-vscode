@@ -132,6 +132,7 @@ async function verifyReplyActions() {
  const reply='# Full reply\n\n~~~js\nCODE\n~~~\n\nEnd **bold**',state={activeId:'reply',conversations:[{id:'reply',messages:[{role:'assistant',text:reply}]}]};
  await performReplyAction(state,{type:'applyReplyCode',conversationId:'reply',requestId:'apply',messageIndex:0,blockIndex:0},editor);
  assert.equal(doc.getText(),'AlphaCODE Beta','Apply preserves selected text and inserts only code content');
+ assert.equal(editor.selection.isEmpty,true,'Apply collapses the expanded original selection');assert.equal(doc.offsetAt(editor.selection.active),9,'cursor ends after inserted code');
  await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),'Alpha Beta','one native Undo reverses Apply');await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),'AlphaCODE Beta');
  const snapshot=captureInsertion(editor);await editor.edit(builder=>builder.insert(new vscode.Position(0,0),'X'));const changed=doc.getText();await assert.rejects(insertAtSnapshot(snapshot,'UNSAFE'),/已变化/);assert.equal(doc.getText(),changed);
  const clipboard=await vscode.env.clipboard.readText();try{await performReplyAction(state,{type:'copyReply',conversationId:'reply',requestId:'copy',messageIndex:0},undefined);assert.equal(await vscode.env.clipboard.readText(),reply,'whole original Markdown copied through native clipboard');}finally{await vscode.env.clipboard.writeText(clipboard);}

@@ -72,7 +72,22 @@ export function captureInsertion(editor: vscode.TextEditor | undefined): Inserti
 export async function insertAtSnapshot(snapshot: InsertionSnapshot, code: string): Promise<void> {
   const { editor, text, offset } = snapshot, doc = editor.document;
   if (!vscode.window.visibleTextEditors.includes(editor) || doc.isClosed || doc.uri.toString() !== snapshot.uri || doc.version !== snapshot.version || doc.getText() !== text) throw new Error("目标笔记已变化或关闭，请重新放置光标后再试。");
-  // 一次原生插入，不调用 save、不替换选区，也不在 await 后重定向到其他编辑器。
-  const accepted = await editor.edit(builder => builder.insert(doc.positionAt(offset), code), { undoStopBefore: true, undoStopAfter: true });
-  if (!accepted) throw new Error("插入被编辑器拒绝，请检查笔记是否只读或已变化。");
+  // 编辑器会自动扩大原选区；仅在用户没有接管光标且正文仍为本次结果时收起它。
+  const active = vscode.window.activeTextEditor;
+  let moved = false;
+  const listeners = [
+    vscode.window.onDidChangeActiveTextEditor(() => { moved = true; }),
+    vscode.window.onDidChangeTextEditorSelection(event => { if (event.textEditor === editor && event.kind !== undefined) moved = true; })
+  ];
+  const inserted = code.replace(/\r?\n/g, doc.eol === 2 ? "\r\n" : "\n");
+  const expected = text.slice(0, offset) + inserted + text.slice(offset);
+  try {
+    // 单次原生插入，不调用 save、不替换选区，也不重定向到其他编辑器。
+    const accepted = await editor.edit(builder => builder.insert(doc.positionAt(offset), code), { undoStopBefore: true, undoStopAfter: true });
+    if (!accepted) throw new Error("插入被编辑器拒绝，请检查笔记是否只读或已变化。");
+    if (!moved && vscode.window.activeTextEditor === active && vscode.window.visibleTextEditors.includes(editor) && !doc.isClosed && doc.version === snapshot.version + 1 && doc.getText() === expected) {
+      const end = doc.positionAt(offset + inserted.length);
+      editor.selection = new vscode.Selection(end, end);
+    }
+  } finally { for (const listener of listeners) listener.dispose(); }
 }
