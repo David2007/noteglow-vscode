@@ -3,7 +3,7 @@ import { relative, isAbsolute } from "node:path";
 export function containsPath(root: string, target: string): boolean { const r = relative(root, target); return r === "" || (!isAbsolute(r) && r !== ".." && !r.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)); }
 export type ReplyAction = { type: "copyReply"; conversationId: string; requestId: string; messageIndex: number } | { type: "applyReplyCode"; conversationId: string; requestId: string; messageIndex: number; blockIndex: number };
 export type ViewMessage = ReplyAction | { type: "images"; conversationId: string; requestId: string; files: EncodedImage[] } | { type: "ready" } | { type: "new" | "stop"; conversationId: string } | { type: "send"; conversationId: string; requestId: string } | { type: "draft"; conversationId: string; text: string; model: string } | { type: "select" | "delete" | "detach" | "preview" | "removeImage" | "previewImage" | "imageResource"; conversationId: string; id: string } | { type: "command"; conversationId: string; command: string };
-export const VIEW_COMMANDS = ["addSelection", "addFile", "bold", "italic", "code", "foreground", "background", "chooseForeground", "chooseBackground", "clearColor", "addImages"];
+export const VIEW_COMMANDS = ["addSelection", "addFile", "textFormat", "bold", "strike", "italic", "underline", "link", "code", "foreground", "background", "chooseForeground", "chooseBackground", "clearColor", "addImages"];
 export function parseViewMessage(value: unknown): ViewMessage {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("消息格式无效。");
   const v = value as Record<string, unknown>;

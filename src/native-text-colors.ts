@@ -1,6 +1,6 @@
 // 纯核心源自 NoteGlow Obsidian 709db00；普通文档编辑由宿主仅刷新失效状态。
 import { normalizeColor, replaceColor, mergeRanges, type ColorRange, type ColorProperty } from "./color-ranges.ts";
-import { nativeTextBlocks, nativeTextDocumentShape, nativeTextMetadataRecords, restoreOwnedInline, formatMarkdownSelection, type PortableColorEdit } from "./markdown-colors.ts";
+import { nativeTextBlocks, nativeTextDocumentShape, nativeTextMetadataRecords, restoreOwnedInline, formatMarkdownSelection, projectNativeMarkdown, type PortableColorEdit, type Format } from "./markdown-colors.ts";
 
 const MARKER = "<!-- noteglow-text-colors:", PREFIX = MARKER + "1 ";
 const MAX_TEXT = 1_000_000, MAX_BLOCK = 200_000;
@@ -84,9 +84,9 @@ export function applyNativeTextColor(text: string, from: number, to: number, pro
   return { text: writeRanges(text, block, ranges), from, to };
 }
 /** 格式只在本块原生 Markdown 上执行；携带颜色通过解析器的精确位置映射，绝不重建 HTML。 */
-export function formatNativeText(text: string, from: number, to: number, format: "bold" | "italic" | "code", applyOnly = false): PortableColorEdit {
+export function formatNativeText(text: string, from: number, to: number, format: Format, applyOnly = false, url?: string): PortableColorEdit {
   const block = selectedBlock(text, from, to);
-  const result = formatMarkdownSelection(block.source, from - block.from, to - block.from, format, block.ranges, true, applyOnly);
+  const result = formatMarkdownSelection(block.source, from - block.from, to - block.from, format, block.ranges, true, applyOnly, url);
   const parsed = nativeTextBlocks(result.text);
   if (parsed.length !== 1 || !parsed[0].supported || parsed[0].kind !== block.kind || parsed[0].from !== 0 || parsed[0].to !== result.text.length) throw new Error("格式修改将改变段落结构，原文已保留。");
   const replacement = result.text + ((result.ranges?.length ?? 0) ? block.eol + block.eol + encodeNativeTextMetadata(result.text, result.ranges!) : "");
@@ -108,4 +108,37 @@ export function migrateOwnedTextToNative(text: string): { text: string; count: n
   // 从后向前插入记录，只有前方块的记录会平移后面的光标；逐块按精确快照匹配位置。
   const blocks = scanNativeText(output).filter((block) => block.status === "valid");
   return { text: output, count: restored.count, map: (position) => { let at = restored.map(position); for (const block of blocks) if (block.to < at) at += block.metadataTo - block.to; return at; } };
+}
+
+/** 标题转换作用于完整单行正文块；颜色快照与偏移随前缀一起更新。 */
+export function setNativeHeading(text: string, from: number, to: number, level: number): PortableColorEdit {
+  if (!Number.isInteger(level) || level < 0 || level > 6) throw new Error("标题级别须为 0–6。");
+  const block = selectedBlock(text, from, to);
+  if (!["paragraph", "heading"].includes(block.kind) || /[\r\n]/.test(block.source)) throw new Error("请选择单行正文或 ATX 标题。");
+  const match = /^( {0,3}#{1,6}[ \t]+)(.*?)([ \t]+#+[ \t]*)?$/.exec(block.source);
+  const oldPrefix = match?.[1].length ?? 0, body = match?.[2] ?? block.source;
+  const prefix = level ? "#".repeat(level) + " " : "";
+  const source = prefix + body;
+  const parsed = nativeTextBlocks(source);
+  if (parsed.length !== 1 || !parsed[0].supported || parsed[0].kind !== (level ? "heading" : "paragraph") || parsed[0].to !== source.length) throw new Error("转换会改变正文结构，未修改。");
+  if (projectNativeMarkdown(source).text !== projectNativeMarkdown(block.source).text) throw new Error("转换会改变可见文字，未修改。");
+  const delta = prefix.length - oldPrefix;
+  const ranges = block.ranges.map(range => ({ ...range, from: range.from + delta, to: range.to + delta }));
+  const before = text.slice(0, block.from), after = text.slice(block.metadataTo);
+  // 标题原本可用单换行隔开正文；转回段落时补空行，避免吞并相邻段落。
+  const leading = !level && before && !/(?:\r?\n){2}$/.test(before) ? block.eol : "";
+  const trailing = !level && /^(?:\r?\n)[^\r\n]/.test(after) ? block.eol : "";
+  const replacement = leading + source + (ranges.length ? block.eol + block.eol + encodeNativeTextMetadata(source, ranges) : "") + trailing;
+  const map = (offset: number) => block.from + leading.length + Math.max(prefix.length, Math.min(source.length, offset - block.from + delta));
+  return { text: before + replacement + after, from: map(from), to: map(to) };
+}
+
+/** 单个绝对 HTTP(S) 地址，最多 2048 字符；空值表示移除链接，整值校验。 */
+export function normalizeLink(value: string): string {
+  if (!value) return "";
+  if (value.length > 2048 || /[\s\u0000-\u001f\u007f]/.test(value)) throw new Error("请输入一个不含空白、最多 2048 字符的 HTTP(S) 地址。");
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error("请输入完整的 HTTP(S) 地址，例如 https://example.com。"); }
+  if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) throw new Error("仅支持不含账号密码的 HTTP(S) 地址。");
+  return url.href.replace(/[()<>]/g, character => "%" + character.charCodeAt(0).toString(16).toUpperCase());
 }

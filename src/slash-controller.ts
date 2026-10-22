@@ -5,7 +5,7 @@ import { slashCommandEdit, type SlashEdit } from "./editor-shortcuts.ts";
 export function activeSlashEdit(editor: vscode.TextEditor | undefined): SlashEdit | null {
   if (!editor || editor.document.uri.scheme !== "file" || editor.document.languageId !== "markdown" || editor.document.isClosed || editor.selections.length !== 1 || !editor.selection.isEmpty) return null;
   const line = editor.document.lineAt(editor.selection.active.line).text;
-  if (editor.selection.active.character !== line.length || !/^ {0,3}\/(code|bg)$/.test(line)) return null;
+  if (editor.selection.active.character !== line.length || !/^ {0,3}\/(code|bg|mermaid|h[1-6])$/.test(line)) return null;
   return slashCommandEdit(editor.document.getText(), editor.document.offsetAt(editor.selection.active));
 }
 
@@ -20,9 +20,9 @@ export function registerSlashCommands(): vscode.Disposable {
     const snippet = new vscode.SnippetString().appendText(edit.insert.slice(0, offset)).appendTabstop(0).appendText(edit.insert.slice(offset));
     try {
       const accepted = await editor.insertSnippet(snippet, new vscode.Range(editor.document.positionAt(edit.from), editor.document.positionAt(edit.to)), { undoStopBefore: true, undoStopAfter: true });
-      if (!accepted) void vscode.window.showWarningMessage("代码块或表格转换未被接受，请检查当前文档后重试。");
+      if (!accepted) void vscode.window.showWarningMessage("快捷命令转换未被接受，请检查当前文档后重试。");
     } catch {
-      void vscode.window.showWarningMessage("代码块或表格转换失败，请检查当前文档后重试。");
+      void vscode.window.showWarningMessage("快捷命令转换失败，请检查当前文档后重试。");
     } finally { refresh(); }
   });
   const listeners = [vscode.window.onDidChangeActiveTextEditor(refresh), vscode.window.onDidChangeTextEditorSelection(refresh), vscode.workspace.onDidChangeTextDocument(refresh)];

@@ -40,3 +40,25 @@ test('stop cancels a send queued behind pending draft persistence before runner 
  try{await activate(context);api.resolveView(context.extensionUri);await api.receive({type:'ready'});hold=true;const front=api.receive({type:'draft',conversationId:'a',text:'保留问题',model:''});await entered;const queued=api.receive({type:'send',conversationId:'a',requestId:'queued-send'});await api.receive({type:'stop',conversationId:'a'});release();await front;await queued;const result=api.renders.find(message=>message.type==='sendResult'&&message.requestId==='queued-send');assert.equal(result.ok,false);assert.match(result.error,/发送已停止.*未启动 CLI/);assert.equal(starts,0);const last=api.renders.filter(message=>message.type==='state').at(-1);assert.equal(last.busy,false);assert.equal(last.conversation.draft,'保留问题');assert.deepEqual(last.conversation.draftImages,[image]);assert.deepEqual(last.conversation.attachments,attachments);assert.equal(last.conversation.messages.length,0);
  }finally{deactivate();for(const item of context.subscriptions)item.dispose();CodexClient.prototype.send=originalSend;ChatStore.prototype.persist=originalPersist;await rm(directory,{recursive:true,force:true});}
 });
+
+test('default write permission reaches both new and resumed CLI runs while explicit read-only is respected',async()=>{
+ const {CodexClient,buildCodexArgs}=await import('../src/codex-client.ts');
+ const originalSend=CodexClient.prototype.send,originalConfig=api.workspace.getConfiguration;
+ for(const [threadId,override] of [[null,undefined],['existing-thread',undefined],['existing-thread','read-only']]){
+  api.reset();const directory=await mkdtemp(join(tmpdir(),'ng-permission-')),storage=join(directory,'storage'),root=join(directory,'notes');await mkdir(root);await mkdir(join(storage,'sessions'),{recursive:true});
+  const conversation={id:'a',root,title:'a',threadId,model:'',draft:'edit fixture',attachments:[],messages:[]};await writeFile(join(storage,'sessions','sessions-v1.json'),JSON.stringify({version:1,activeId:'a',conversations:[conversation],colors:{foreground:'#c0392b',background:'#fff88f'}}));
+  api.workspace.workspaceFolders=[{name:'notes',uri:new api.Uri(root)}];api.workspace.isTrusted=true;
+  api.workspace.getConfiguration=()=>({get:(key,fallback)=>key==='sandboxMode'&&override?override:fallback});
+  let received;CodexClient.prototype.send=async(_prompt,_root,settings)=>{received=settings;return 'fixture response';};
+  const context={storageUri:new api.Uri(storage),extensionUri:new api.Uri(directory),subscriptions:[],globalState:{get(){},async update(){}}};
+  try{
+   await activate(context);api.resolveView(context.extensionUri);await api.receive({type:'ready'});
+   const finished=api.waitForRender(state=>state.type==='state'&&!state.busy&&state.conversation?.messages.some(m=>m.role==='assistant'));
+   await api.receive({type:'send',conversationId:'a',requestId:'permission-test'});await finished;
+   assert.equal(received.sandboxMode,override??'workspace-write');assert.equal(received.sessionId,threadId);
+   const args=buildCodexArgs(received,root);assert.equal(args.includes('--dangerously-bypass-approvals-and-sandbox'),false);
+   if(threadId)assert.ok(args.includes(`sandbox_mode="${override??'workspace-write'}"`));else assert.equal(args[args.indexOf('--sandbox')+1],'workspace-write');
+   assert.equal(api.renders.filter(s=>s.type==='state').at(-1).permission,override?'只读':'工作区写入');
+  }finally{deactivate();for(const item of context.subscriptions)item.dispose();await rm(directory,{recursive:true,force:true});CodexClient.prototype.send=originalSend;api.workspace.getConfiguration=originalConfig;}
+ }
+});

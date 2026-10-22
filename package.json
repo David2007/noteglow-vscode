@@ -1,11 +1,11 @@
 {
   "name": "noteglow",
   "displayName": "NoteGlow",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "David2007",
   "description": "彩色 Markdown · 图片与多选区引用 · 本机 Codex 对话",
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.106.0"
   },
   "categories": [
     "Other",
@@ -50,7 +50,8 @@
   },
   "activationEvents": [
     "onView:noteglow.chat",
-    "onLanguage:markdown"
+    "onLanguage:markdown",
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
@@ -157,14 +158,39 @@
         "command": "noteglow.foldMetadata",
         "title": "收起颜色记录",
         "category": "NoteGlow"
+      },
+      {
+        "command": "noteglow.textFormat",
+        "title": "正文 / 标题",
+        "category": "NoteGlow",
+        "icon": "$(symbol-string)"
+      },
+      {
+        "command": "noteglow.strike",
+        "title": "删除线",
+        "category": "NoteGlow",
+        "icon": "$(strikethrough)"
+      },
+      {
+        "command": "noteglow.underline",
+        "title": "下划线",
+        "category": "NoteGlow",
+        "icon": "$(underline)"
+      },
+      {
+        "command": "noteglow.link",
+        "title": "超链接",
+        "category": "NoteGlow",
+        "icon": "$(link)"
       }
     ],
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "noteglow",
           "title": "NoteGlow",
-          "icon": "media/icon.svg"
+          "icon": "media/icon.svg",
+          "order": 0
         }
       ]
     },
@@ -208,7 +234,7 @@
             "read-only",
             "workspace-write"
           ],
-          "default": "read-only",
+          "default": "workspace-write",
           "scope": "application",
           "enumDescriptions": [
             "只读工作区。",
@@ -239,6 +265,26 @@
           "command": "noteglow.addSelection",
           "when": "editorLangId == markdown && editorHasSelection",
           "group": "noteglow@0"
+        },
+        {
+          "command": "noteglow.link",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@0.5"
+        },
+        {
+          "command": "noteglow.underline",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@0.5"
+        },
+        {
+          "command": "noteglow.strike",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@0.5"
+        },
+        {
+          "command": "noteglow.textFormat",
+          "when": "editorLangId == markdown && editorHasSelection",
+          "group": "noteglow@0.5"
         },
         {
           "command": "noteglow.bold",
@@ -285,7 +331,7 @@
         {
           "command": "noteglow.addSelection",
           "when": "editorLangId == markdown",
-          "group": "navigation"
+          "group": "navigation@-100"
         }
       ],
       "view/title": [

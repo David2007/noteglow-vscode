@@ -20,7 +20,10 @@ $('new').onclick=()=>post('new');$('conversations').onchange=()=>post('select',{
 $('delete').onclick=()=>post('delete',{id:active});$('stop').onclick=()=>{uploadEpoch++;post('stop');};
 function submit(){if(busy||uploading||pendingSend||!active)return;draft();const requestId=crypto.randomUUID();pendingSend={requestId,conversationId:active,revision:inputRevision,text:$('question').value};controls();post('send',{requestId});}
 $('send').onclick=submit;
-$('question').onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();submit();}};
+let composing=false;
+$('question').addEventListener('compositionstart',()=>{composing=true;});
+$('question').addEventListener('compositionend',()=>{composing=false;});
+$('question').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.altKey&&!e.isComposing&&!composing&&e.keyCode!==229){e.preventDefault();if(!e.repeat)submit();}};
 $('add-images').onclick=()=>post('command',{command:'addImages'});
 for(const button of document.querySelectorAll('[data-command]'))button.onclick=()=>post('command',{command:button.dataset.command});
 function option(value,label){const o=document.createElement('option');o.value=value;o.textContent=label;return o;}

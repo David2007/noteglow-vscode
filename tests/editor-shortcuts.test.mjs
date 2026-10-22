@@ -31,3 +31,20 @@ test('plain input, invalid cursors and protected Markdown never expand', () => {
  assert.equal(slashCommandEdit('x'.repeat(1_000_001), 1), null);
 });
 
+
+test('all headings and Mermaid expand with body cursor and preserve LF/CRLF boundaries',()=>{
+ for(let level=1;level<=6;level++){
+  const command=`/h${level}`,edit=expand(command,command);
+  assert.equal(edit.text,'#'.repeat(level)+' ');assert.equal(edit.cursor,level+1);
+  assert.equal(expand('before\n  '+command+'\nafter',command).text,'before\n\n'+'#'.repeat(level)+' \n\nafter');
+ }
+ for(const eol of ['\n','\r\n']){
+  const source=['before','/mermaid','after'].join(eol),edit=expand(source,'/mermaid');
+  assert.equal(edit.text,['before','','```mermaid','flowchart TD','    A[开始] --> B[结束]','```','','after'].join(eol));
+  assert.equal(edit.text.slice(edit.cursor,edit.cursor+12),'flowchart TD');
+ }
+});
+test('new slash commands retain exact-line and protected-region rules',()=>{
+ for(const command of ['/h1','/h6','/mermaid'])for(const source of ['hello '+command,command+' ',command+' x','    '+command,'> '+command,'- '+command,'```\n'+command+'\n```','---\n'+command+'\n---','<!--\n'+command+'\n-->'])assert.equal(slashCommandEdit(source,source.indexOf(command)+command.length),null,source);
+ for(const source of ['/h0','/h7','/H1','/Mermaid'])assert.equal(slashCommandEdit(source,source.length),null);
+});

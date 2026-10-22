@@ -52,3 +52,15 @@ test('detached reply buttons cannot act on a different conversation or a newly r
  const oldB=buttons();render('b');count=w.sent.length;for(const button of oldB){assert.equal(button.isConnected,false);button.onclick();}assert.equal(w.sent.length,count);
  const current=buttons();current[1].onclick();assert.equal(w.sent.at(-1).type,'applyReplyCode');assert.equal(w.sent.at(-1).conversationId,'b');
 });
+
+test('Enter sends once; Shift Enter, IME confirmation and auto-repeat never submit',async()=>{
+ const w=await webview();w.render({conversation:c()});const q=w.elements.get('question');let prevented=0;
+ const key=extra=>q.onkeydown({key:'Enter',preventDefault(){prevented++;},...extra});
+ key({shiftKey:true});key({isComposing:true});key({keyCode:229});key({repeat:true});key({altKey:true});
+ q.compositionstart();key({});q.compositionend();
+ assert.equal(w.sent.some(m=>m.type==='send'),false);
+ key({});assert.equal(w.sent.filter(m=>m.type==='send').length,1);assert.equal(w.sent.at(-2).type,'draft');
+ key({});assert.equal(w.sent.filter(m=>m.type==='send').length,1,'pending slot prevents repeated submit');assert.ok(prevented);
+ const request=w.sent.at(-1);w.message({type:'sendResult',conversationId:'a',requestId:request.requestId,ok:false,error:'failed'});
+ key({ctrlKey:true});assert.equal(w.sent.filter(m=>m.type==='send').length,2,'existing Ctrl Enter remains usable');
+});

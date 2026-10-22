@@ -6,7 +6,7 @@ import { EntityDecoder, DecodingMode, htmlDecodeTree } from "entities/decode";
 import { mergeRanges, normalizeColor, replaceColor, type ColorProperty, type ColorRange } from "./color-ranges.ts";
 
 export interface PortableColorEdit { text: string; from: number; to: number; ranges?: ColorRange[] }
-type Format = "bold" | "italic" | "code";
+export type Format = "bold" | "italic" | "code" | "strike" | "underline" | "link";
 type Styles = Partial<Record<ColorProperty, string>>;
 interface Unit { from: number; to: number; value: string }
 interface Pair { from: number; to: number; resultFrom: number; resultTo: number }
@@ -88,7 +88,7 @@ export function migrateMarkdownColors(text: string, ranges: readonly ColorRange[
 }
 
 /** 先在内存去掉自有颜色壳，格式标记写到壳外；只有最终文档交给一次编辑事务。 */
-export function formatMarkdownSelection(text: string, from: number, to: number, format: Format, legacyRanges: readonly ColorRange[] = [], native = false, applyOnly = false): PortableColorEdit {
+export function formatMarkdownSelection(text: string, from: number, to: number, format: Format, legacyRanges: readonly ColorRange[] = [], native = false, applyOnly = false, url?: string): PortableColorEdit {
   checkSelection(text, from, to);
   const decoded = decodeOwnedColors(text);
   let start = decoded.map(from, 1), end = decoded.map(to, -1);
@@ -130,7 +130,7 @@ export function formatMarkdownSelection(text: string, from: number, to: number, 
     // 全行选择时排除列表/标题/引用的外部前缀，不能把容器标记放进格式符。
     const pFrom = position(paragraph).from, pTo = position(paragraph).to;
     start = Math.max(start, pFrom); end = Math.min(end, pTo);
-    const wanted = format === "bold" ? "strong" : "emphasis";
+    const wanted = format === "bold" ? "strong" : format === "italic" ? "emphasis" : format === "strike" ? "delete" : format;
     // 重复格式只补加，不把已有格式切掉；部分选中同一格式容器也保持原样。
     if (applyOnly) {
       let alreadyApplied = false;
@@ -145,17 +145,24 @@ export function formatMarkdownSelection(text: string, from: number, to: number, 
       const bounds = position(wrapper);
       const innerFrom = position(wrapper.children[0]).from;
       const innerTo = position(wrapper.children[wrapper.children.length - 1]).to;
-      edits.push({ from: bounds.from, to: innerFrom, text: "" }, { from: innerTo, to: bounds.to, text: "" });
+      edits.push({ from: bounds.from, to: innerFrom, text: format === "link" && url ? "[" : "" }, { from: innerTo, to: bounds.to, text: format === "link" && url ? `](${url})` : "" });
       start = innerFrom; end = innerTo;
     } else {
-      const delimiter = format === "bold" ? "**" : "*";
-      edits.push({ from: start, to: start, text: delimiter }, { from: end, to: end, text: delimiter });
+      if (format === "link" && !url) return { text, from, to, ranges: [...legacyRanges] };
+      if (format === "link") {
+        let intersects = false;
+        walkMd(paragraph, node => { const bounds = position(node); if (["link", "linkReference"].includes(node.type) && bounds.from < end && bounds.to > start) intersects = true; });
+        if (intersects) throw new Error("请选择完整链接再修改，不能嵌套链接。");
+      }
+      const open = format === "bold" ? "**" : format === "italic" ? "*" : format === "strike" ? "~~" : format === "underline" ? "<u>" : "[";
+      const close = format === "underline" ? "</u>" : format === "link" ? `](${url})` : open;
+      edits.push({ from: start, to: start, text: open }, { from: end, to: end, text: close });
     }
   }
   const changed = editText(decoded.text, edits);
   const next = buildModel(changed.text, mapRanges(colors, changed.map));
   const result = native ? { text: changed.text, from: changed.map(start, 1), to: changed.map(end, -1), ranges: mapRanges(colors, changed.map) } : finish(changed.text, next, changed.map(start, 1), changed.map(end, -1), false);
-  if (containerSignature(model.ast) !== containerSignature(next.ast) || visibleSignature(model) !== visibleSignature(next)) throw new Error("格式操作将改变正文结构或代码文字，已停止。");
+  if (containerSignature(model.ast, false, format === "link") !== containerSignature(next.ast, false, format === "link") || visibleSignature(model) !== visibleSignature(next)) throw new Error("格式操作将改变正文结构或代码文字，已停止。");
   return result;
 }
 
@@ -164,7 +171,22 @@ function parseMarkdown(text: string): MdNode {
   // YAML 不参与正文解析。等长遮罩保留 CR/LF 与 UTF16 offset，也避免 micromark 吞掉 BOM 后位置整体偏移。
   const yamlEnd = frontmatterEnd(text);
   const source = yamlEnd ? text.slice(0, yamlEnd).replace(/[^\r\n]/g, " ") + text.slice(yamlEnd) : text;
-  return fromMarkdown(source, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }) as unknown as MdNode;
+  const ast = fromMarkdown(source, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }) as unknown as MdNode;
+  // Markdown 没有下划线语法；只识别同层完整、无属性的标准 <u>，其它 HTML 继续受保护。
+  const underline = (node: MdNode): void => {
+    if (!node.children) return;
+    node.children.forEach(underline);
+    const children = node.children;
+    for (let i = children.length - 1; i >= 0; i--) {
+      if (children[i].type !== "html" || children[i].value !== "<u>") continue;
+      const end = children.findIndex((child, at) => at > i && child.type === "html" && child.value === "</u>");
+      if (end < 0 || end === i + 1) continue;
+      const first = children[i], last = children[end];
+      children.splice(i, end - i + 1, { type: "underline", children: children.slice(i + 1, end), position: { start: first.position!.start, end: last.position!.end } });
+    }
+  };
+  underline(ast);
+  return ast;
 }
 function position(node: MdNode): { from: number; to: number } {
   const from = node.position?.start.offset, to = node.position?.end.offset;
@@ -602,9 +624,9 @@ function protectedExtensions(text: string, code: readonly Leaf[], prose: readonl
   }
   return output;
 }
-function containerSignature(ast: MdNode, includeFormatting = false): string {
+function containerSignature(ast: MdNode, includeFormatting = false, ignoreLinks = false): string {
   const result: unknown[] = [];
-  walkMd(ast, (node) => { if (["list", "listItem", "blockquote", "heading", "link", "linkReference", "image", "imageReference", "definition", "table", "tableRow", "tableCell", ...(includeFormatting ? ["strong", "emphasis", "delete"] : [])].includes(node.type)) result.push([node.type, node.ordered, node.start, node.checked, node.depth, node.url, node.title, node.identifier]); });
+  walkMd(ast, (node) => { if (["list", "listItem", "blockquote", "heading", ...(ignoreLinks ? [] : ["link"]), "linkReference", "image", "imageReference", "definition", "table", "tableRow", "tableCell", ...(includeFormatting ? ["strong", "emphasis", "delete", "underline"] : [])].includes(node.type)) result.push([node.type, node.ordered, node.start, node.checked, node.depth, node.url, node.title, node.identifier]); });
   return JSON.stringify(result);
 }
 function visibleSignature(model: Model): string { return model.leaves.map((leaf) => leaf.value).join(""); }
@@ -621,8 +643,8 @@ function findExactFormat(node: MdNode, from: number, to: number, wanted: string)
     // 选中文字通常不含嵌套格式符。只穿透透明格式层判断是否完整选中，不能穿透链接/代码。
     // 真正移除时仍用调用方的直接子节点边界，保留另外一层加粗/斜体及其颜色。
     let first = candidate.children[0], last = candidate.children[candidate.children.length - 1];
-    while (["strong", "emphasis", "delete"].includes(first.type) && first.children?.length) first = first.children[0];
-    while (["strong", "emphasis", "delete"].includes(last.type) && last.children?.length) last = last.children[last.children.length - 1];
+    while (["strong", "emphasis", "delete", "underline"].includes(first.type) && first.children?.length) first = first.children[0];
+    while (["strong", "emphasis", "delete", "underline"].includes(last.type) && last.children?.length) last = last.children[last.children.length - 1];
     const innerFrom = position(first).from, innerTo = position(last).to;
     if (from >= outer.from && from <= innerFrom && to >= innerTo && to <= outer.to) result = candidate;
   });
@@ -632,7 +654,7 @@ function findExactFormat(node: MdNode, from: number, to: number, wanted: string)
 /** 原生正文只接受已知 Markdown 容器；返回文字单元，列表号、链接地址和格式符不参与着色。 */
 export function nativeTextBlocks(text: string): Array<{ from: number; to: number; line: number; kind: string; structure: string; supported: boolean; units: Array<{ from: number; to: number }> }> {
   const ast = parseMarkdown(text), model = buildModel(text, [], true);
-  const allowed = new Set(["paragraph", "heading", "list", "listItem", "text", "inlineCode", "strong", "emphasis", "delete", "link", "break"]);
+  const allowed = new Set(["paragraph", "heading", "list", "listItem", "text", "inlineCode", "strong", "emphasis", "delete", "underline", "link", "break"]);
   return (ast.children ?? []).filter((node) => ["paragraph", "heading", "list"].includes(node.type)).map((node) => {
     const { from, to } = position(node); let supported = true;
     const shape: unknown[] = [];

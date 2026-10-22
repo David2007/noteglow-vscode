@@ -19,6 +19,8 @@ import { registerNativeDecorations } from "./native-decorations.ts";
 import { extendMarkdownIt } from "./native-preview.ts";
 import { registerOutline } from "./outline-tree.ts";
 import { registerMetadataFolding } from "./native-metadata-folding.ts";
+import { normalizeLink } from "./native-text-colors.ts";
+import type { Format } from "./markdown-colors.ts";
 import { registerSlashCommands } from "./slash-controller.ts";
 let client: CodexClient | undefined;
 let stopActive: (() => void) | undefined;
@@ -47,7 +49,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
     return { ...message, parts: cached.parts };
   };
   // 仅记录本次扩展会话成功应用的操作；清除、取消及失败不覆盖上一次格式。
-  let lastFormat: { action: "bold" | "italic" | "code" | ColorProperty; color?: string } | undefined;
+  let lastFormat: { action: Exclude<Format, "link"> | ColorProperty; color?: string } | undefined;
   let models: CodexModel[] = [], modelWarning = "";
   const refreshModels = (): void => { try { models = readModels(); modelWarning = ""; } catch { models = []; modelWarning = "未读取到模型缓存；默认使用 Codex CLI 模型，也会保留已保存的模型。"; } };
   refreshModels();
@@ -71,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
       throw e;
     }); operations = pending; return pending;
   }, cache ? vscode.Uri.file(cache.directory) : undefined, cancel);
-  const render = (): void => view.post({ type: "state", imageLimits:{maxImages:MAX_IMAGES,maxBytes:MAX_IMAGE_BYTES,maxTotalBytes:MAX_IMAGE_TOTAL_BYTES}, conversations: store.state.conversations.map(c => ({ id:c.id, title:c.title })), conversation: store.current() ? { ...store.current()!, messages: store.current()!.messages.map(withReplyParts) } : null, busy:store.working, colors:store.state.colors, models, status:status || modelWarning, permission:config().get<string>("sandboxMode", "read-only") === "workspace-write" ? "工作区写入" : "只读" });
+  const render = (): void => view.post({ type: "state", imageLimits:{maxImages:MAX_IMAGES,maxBytes:MAX_IMAGE_BYTES,maxTotalBytes:MAX_IMAGE_TOTAL_BYTES}, conversations: store.state.conversations.map(c => ({ id:c.id, title:c.title })), conversation: store.current() ? { ...store.current()!, messages: store.current()!.messages.map(withReplyParts) } : null, busy:store.working, colors:store.state.colors, models, status:status || modelWarning, permission:config().get<string>("sandboxMode", "workspace-write") === "workspace-write" ? "工作区写入" : "只读" });
   async function replyAction(message: ReplyAction): Promise<void> {
     try {
       // 不进入发送队列：复制历史回复在 Codex 运行时仍可使用，插入目标在首次 await 前固定。
@@ -117,7 +119,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
     await vscode.commands.executeCommand("noteglow.chat.focus"); render();
   }
   async function format(action: string): Promise<void> {
-    const snap = snapshot(); let property: ColorProperty | undefined, color: string | undefined;
+    const snap = snapshot();
+    if (action === "textFormat") {
+      const picked = await vscode.window.showQuickPick([{ label: "正文", level: 0 }, ...Array.from({ length: 6 }, (_, index) => ({ label: `H${index + 1} · 标题 ${index + 1}`, level: index + 1 }))], { title: "Text 格式" });
+      if (!picked) return;
+      await editSnapshot(snap, "heading", String(picked.level)); selection = capture(snap.editor); return;
+    }
+    if (action === "link") {
+      const url = await vscode.window.showInputBox({ title: "超链接", prompt: "单个 HTTP(S) 地址，最多 2048 字符，例如 https://example.com；留空移除完整链接", validateInput: value => { try { normalizeLink(value); return undefined; } catch (error) { return (error as Error).message; } } });
+      if (url === undefined) return;
+      await editSnapshot(snap, "link", url); selection = capture(snap.editor); return;
+    }
+    let property: ColorProperty | undefined, color: string | undefined;
     if(["foreground","background","chooseForeground","chooseBackground"].includes(action)) {
       property = action.toLowerCase().includes("background") ? "background" : "foreground";
       color = store.state.colors[property];
@@ -128,15 +141,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
         if(input === undefined) return; color = normalizeColor(input) ?? undefined; if(!color) throw new Error("颜色无效。");
       }
     }
-    await editSnapshot(snap, property ?? (action === "clearColor" ? "clear" : action as "bold"|"italic"|"code"), color);
-    if (action !== "clearColor") lastFormat = { action: property ?? action as "bold" | "italic" | "code", color };
+    await editSnapshot(snap, property ?? (action === "clearColor" ? "clear" : action as Format), color);
+    if (action !== "clearColor") lastFormat = { action: property ?? action as Exclude<Format, "link">, color };
     selection = capture(snap.editor);
     if(property && color) { store.assertIdle(); store.state.colors[property] = color; if(directory) await store.persist(); }
     render();
   }
   async function send(requestId: string): Promise<void> {
     const c = store.current(); if(!c) throw new Error("请先创建对话。");
-    const settings = {codexPath:config().get("codexPath","codex"),sandboxMode:config().get<"read-only"|"workspace-write">("sandboxMode","read-only"),approveForMe:config().get("approveForMe",false)};
+    const settings = {codexPath:config().get("codexPath","codex"),sandboxMode:config().get<"read-only"|"workspace-write">("sandboxMode","workspace-write"),approveForMe:config().get("approveForMe",false)};
     status = "正在保存并启动 Codex…";
     // send 在首次 await 前占用实例槽位；处理器不等待 CLI，停止按钮仍可进入。
     const pending = store.send(c.id, runner, settings, {onThreadId:()=>render(),onCleanupWarning:message=>{ void vscode.window.showWarningMessage(message); },onStatus:s=>{status=s;render();},onProgress:p=>{status=p.label;render();}}, () => verifyRoot(c.root), cache);
@@ -182,7 +195,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
     await editSnapshot(snap, format.action, format.color, true);
     selection = capture(snap.editor);
   });
-  for(const action of ["bold","italic","code","foreground","background","chooseForeground","chooseBackground","clearColor"]) command(action,()=>format(action));
+  for(const action of ["textFormat","bold","strike","italic","underline","link","code","foreground","background","chooseForeground","chooseBackground","clearColor"]) command(action,()=>format(action));
   for (const action of ["restoreNative", "resetNativeColors"]) command(action, async () => {
     if (context.storageUri?.scheme !== "file") throw new Error("请先打开本机文件夹，以保存原文备份。");
     const backup = await restoreNative(vscode.window.activeTextEditor, join(context.storageUri.fsPath, "native-format-backups"), action === "resetNativeColors");
@@ -191,13 +204,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ exte
   command("theme",async()=>{const settings=vscode.workspace.getConfiguration("workbench"); const current=settings.get<string>("colorTheme"); if(current!=="NoteGlow 绿豆色") await context.globalState.update("previousTheme",current); await settings.update("colorTheme","NoteGlow 绿豆色",vscode.ConfigurationTarget.Global);});
   command("restoreTheme",async()=>{const previous=context.globalState.get<string>("previousTheme"); if(!previous) throw new Error("没有记录之前的主题。"); if(vscode.workspace.getConfiguration("workbench").get("colorTheme")!=="NoteGlow 绿豆色") throw new Error("当前主题已手动改变，未覆盖您的新选择。"); await vscode.workspace.getConfiguration("workbench").update("colorTheme",previous,vscode.ConfigurationTarget.Global);});
   context.subscriptions.push(vscode.window.registerWebviewViewProvider("noteglow.chat",view));
+  // 原生视图命令只展开本扩展，不移动其它视图或夺取正文输入焦点。
+  void vscode.commands.executeCommand("noteglow.chat.focus", { preserveFocus: true });
   const changed = new vscode.EventEmitter<void>(); context.subscriptions.push(changed);
   context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(e=>{rememberEditor(e.textEditor);if(e.textEditor.document.languageId!=="markdown")return;try{selection=capture(e.textEditor);}catch{selection=undefined;}changed.fire();}));
   try{selection=capture(vscode.window.activeTextEditor);}catch{}
   context.subscriptions.push(vscode.languages.registerCodeLensProvider("markdown",{onDidChangeCodeLenses:changed.event,provideCodeLenses:doc=>{
     if(!config().get("selectionCodeLens",true)||!selection||selection.uri!==doc.uri.toString()||selection.version!==doc.version)return [];
     const range=new vscode.Range(doc.positionAt(selection.from).line,0,doc.positionAt(selection.from).line,0);
-    return [["addSelection","＋ 添加到 Codex"],["bold","加粗"],["italic","斜体"],["code","代码"],["foreground","字体色"],["background","背景色"]].map(([c,t])=>new vscode.CodeLens(range,{command:`noteglow.${c}`,title:t}));
+    return [["addSelection","＋ 添加到 Codex"],["textFormat","Text ▾"],["bold","加粗"],["strike","删除线"],["italic","斜体"],["underline","下划线"],["link","超链接"],["code","代码"],["foreground","字体色"],["background","背景色"]].map(([c,t])=>new vscode.CodeLens(range,{command:`noteglow.${c}`,title:t}));
   }}));
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(()=>{cancel();render();}));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e=>{if(e.affectsConfiguration("noteglow")){refreshModels();changed.fire();render();}}));

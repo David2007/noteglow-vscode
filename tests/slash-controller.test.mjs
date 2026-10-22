@@ -32,3 +32,13 @@ test('rejected and failed snippet edits notify without adding a stale newline',a
   assert.equal(api.calls.filter(c=>c[0]==='type').length,before);controller.dispose();
  }
 });
+
+test('host eligibility and snippet path include heading and Mermaid commands',async()=>{
+ for(const command of ['/h1','/h2','/h3','/h4','/h5','/h6','/mermaid']){
+  api.window.activeTextEditor=editor(command);assert.ok(activeSlashEdit(api.window.activeTextEditor));
+  const controller=registerSlashCommands();await api.handlers.get('noteglow.expandSlash')();
+  const result=api.window.activeTextEditor.inserted;assert.ok(result);assert.equal(result.range.end,command.length);
+  assert.deepEqual(result.options,{undoStopBefore:true,undoStopAfter:true});
+  assert.equal(result.snippet.cursor,command==='/mermaid'?11:Number(command.at(-1))+1);controller.dispose();
+ }
+});
