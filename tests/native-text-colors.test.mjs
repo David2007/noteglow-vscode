@@ -126,9 +126,13 @@ test('metadata schema rejects malformed, noncanonical and overlapping ranges wit
  }
 });
 
-test('selection ownership rejects cross-block, metadata and syntax-only selections',()=>{
+test('selection ownership accepts supported cross-block ranges while rejecting metadata and invalid syntax',()=>{
  const source=paint('alpha\n\nbeta','alpha').text;
- for(const [from,to] of [[-1,1],[0,0],[0,source.length+1],[0,source.length],[source.indexOf('<!--'),source.indexOf('<!--')+4]]) assert.throws(()=>applyNativeTextColor(source,from,to,'background',bg));
+ const across=applyNativeTextColor(source,0,source.length,'background',bg);
+ const expected=['alpha',encodeNativeTextMetadata('alpha',[{from:0,to:5,property:'background',color:bg}]),'beta',encodeNativeTextMetadata('beta',[{from:0,to:4,property:'background',color:bg}])].join('\n\n');
+ assert.equal(across.text,expected);assert.equal(resetNativeTextMetadata(across.text),'alpha\n\nbeta');
+ assert.deepEqual(nativeTextColorRanges(across.text).map(range=>across.text.slice(range.from,range.to)),['alpha','beta']);
+ for(const [from,to] of [[-1,1],[0,0],[0,source.length+1],[source.indexOf('<!--'),source.indexOf('<!--')+4]]) assert.throws(()=>applyNativeTextColor(source,from,to,'background',bg));
  assert.throws(()=>applyNativeTextColor('**alpha**',0,2,'background',bg),/格式标签/);
  assert.throws(()=>applyNativeTextColor('alpha',0,1,'background'),/#RGB/);
  assert.throws(()=>applyNativeTextColor('alpha',0,1,'foreground','invalid'),/#RGB/);
