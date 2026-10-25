@@ -198,6 +198,8 @@ async function verifyMultilineFormatting() {
  const protectedSource='alpha\n\n> quote\n\nomega';
  await editor.edit(builder=>builder.replace(new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length)),protectedSource));await doc.save();
  editor.selection=new vscode.Selection(doc.positionAt(0),doc.positionAt(protectedSource.length));const version=doc.version;
- await vscode.commands.executeCommand('noteglow.bold');assert.equal(doc.getText(),protectedSource);assert.equal(doc.version,version);await saved();
+ // 失败通知等待用户关闭；直接调用同一生产适配器验证拒绝，避免测试等待交互。
+ const {capture,editSnapshot}=require(process.env.NOTEGLOW_REPLY_ADAPTER);
+ await assert.rejects(editSnapshot(capture(editor),'bold'),/不支持/);assert.equal(doc.getText(),protectedSource);assert.equal(doc.version,version);await saved();
  console.log('NoteGlow multiline: three paragraphs plus code, table rows, colors, official preview, disk equality, single Undo/Redo and guarded-gap atomicity passed.');
 }
