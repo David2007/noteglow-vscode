@@ -184,7 +184,7 @@ async function verifyMultilineFormatting() {
  const table=doc.getText();assert.ok(table.includes('| *nil* | *发送* `for range` *阻塞* |'));assert.ok(table.includes('| *other* | *unchanged* |'));assert.ok(table.startsWith(original.slice(0,original.indexOf('| 场景'))));
  await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),original);await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),table);await vscode.commands.executeCommand('undo');await doc.save();
  select('发送','unchanged');await vscode.commands.executeCommand('noteglow.background');await saved();const tableColored=doc.getText();
- const tableHtml=await vscode.commands.executeCommand('markdown.api.render',tableColored);assert.match(tableHtml,/<table>/);assert.match(tableHtml,/<code><span style="background-color:#fff88f">for range<\/span><\/code>/);assert.equal(records(tableColored).length,1);
+ const tableHtml=await vscode.commands.executeCommand('markdown.api.render',tableColored);assert.match(tableHtml,/<table\b/);assert.match(tableHtml,/<code><span style="background-color:#fff88f">for range<\/span><\/code>/);assert.equal(records(tableColored).length,1);
  await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),original);await doc.save();
  // 已有链接和下划线位于整段选区边缘时，不能丢失源码定界符；同时验证批量 uniform 路径。
  const inline='[foo](https://example.com) tail\n\nhead <u>bar</u>';
