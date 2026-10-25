@@ -8,7 +8,7 @@ exports.run=async()=>{
  const painted=doc.getText();await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),'1. **重要** 正文。\n\n```js\nconst a = 1;\n```\n');await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),painted);
  await vscode.commands.executeCommand('markdown.api.reloadPlugins');
  const firstHtml=await vscode.commands.executeCommand('markdown.api.render',painted);assert.match(firstHtml,/background-color:#fff88f/,'official Markdown renderer loads NoteGlow plugin');assert.match(firstHtml,/<strong>/);
- await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);await verifyShortcuts(extension);await verifyExtraFormats(extension);await verifyMetadataFolding();await verifyReplyActions();
+ await verifyMultilineFormatting();await verifyRepeatedCodeColors();await verifyRestoration();await verifyOutline(extension);await verifyShortcuts(extension);await verifyExtraFormats(extension);await verifyMetadataFolding();await verifyReplyActions();
  const bom=await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'bom.md'));const be=await vscode.window.showTextDocument(bom);be.selection=new vscode.Selection(bom.positionAt(0),bom.positionAt(3));await vscode.commands.executeCommand('noteglow.foreground');assert.match(bom.getText(),/noteglow-text-colors:1/);assert.equal(bom.isDirty,false);
  await vscode.commands.executeCommand('markdown.showPreviewToSide');await vscode.commands.executeCommand('noteglow.open');
  await vscode.commands.executeCommand('noteglow.addImages',[vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'image.png')]);
@@ -154,4 +154,50 @@ async function verifyExtraFormats(extension) {
  select();await vscode.commands.executeCommand('noteglow.strike');assert.ok(doc.getText().startsWith('<u>~~Alpha~~</u>'));
  const rendered=await vscode.commands.executeCommand('markdown.api.render',doc.getText());assert.match(rendered,/<u>/);assert.match(rendered,/<s>/);assert.match(rendered,/background-color:#fff88f/);
  assert.equal(doc.isDirty,false);assert.equal(Buffer.from(await vscode.workspace.fs.readFile(uri)).toString(),doc.getText());
+}
+
+
+// 合成笔记走公开格式命令、真实保存和官方预览；整批编辑必须只增加一个撤销步骤。
+async function verifyMultilineFormatting() {
+ const uri=vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'multiline-table.md');
+ const original='第一段：alpha `code` tail。\n\n第二段：beta。\n\n第三段：gamma。\n\n| 场景 | 结果 |\n| --- | --- |\n| nil | 发送 `for range` 阻塞 |\n| other | unchanged |\n\nend';
+ await vscode.workspace.fs.writeFile(uri,Buffer.from(original));
+ const doc=await vscode.workspace.openTextDocument(uri),editor=await vscode.window.showTextDocument(doc);
+ const select=(first,last)=>{const from=doc.getText().indexOf(first),to=doc.getText().indexOf(last)+last.length;assert.ok(from>=0&&to>from);editor.selection=new vscode.Selection(doc.positionAt(from),doc.positionAt(to));};
+ const saved=async()=>{assert.equal(doc.isDirty,false);assert.equal(Buffer.from(await vscode.workspace.fs.readFile(uri)).toString(),doc.getText());};
+ select('第一段','gamma');await vscode.commands.executeCommand('noteglow.bold');await saved();
+ const bold=doc.getText();assert.ok(bold.startsWith('**第一段：alpha** `code` **tail。**'));assert.ok(bold.includes('**第二段：beta。**'));assert.ok(bold.includes('**第三段：gamma**。'));
+ assert.ok(bold.includes('| nil | 发送 `for range` 阻塞 |'));
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),original);await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),bold);
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),original);await doc.save();
+ select('第一段','gamma');await vscode.commands.executeCommand('noteglow.background');await saved();
+ select('第一段','gamma');await vscode.commands.executeCommand('noteglow.foreground');await saved();const colored=doc.getText();
+ const records=source=>Array.from(source.matchAll(/<!-- noteglow-text-colors:1 (.+) -->/g),m=>JSON.parse(m[1]));
+ assert.equal(records(colored).length,3);assert.ok(records(colored).every(record=>record.ranges.some(range=>range.property==='foreground')&&record.ranges.some(range=>range.property==='background')));
+ select('第一段','gamma');await vscode.commands.executeCommand('noteglow.bold');await saved();
+ const combined=doc.getText();const html=await vscode.commands.executeCommand('markdown.api.render',combined);
+ assert.match(html,/<strong>/);assert.match(html,/<code>/);assert.match(html,/background-color:#fff88f/);assert.match(html,/color:#c0392b/);
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),colored);await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),combined);await vscode.commands.executeCommand('undo');await doc.save();
+ select('第一段','gamma');await vscode.commands.executeCommand('noteglow.clearColor');assert.equal(doc.getText(),original);await saved();
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),colored);await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),original);await doc.save();
+ select('nil','unchanged');await vscode.commands.executeCommand('noteglow.italic');await saved();
+ const table=doc.getText();assert.ok(table.includes('| *nil* | *发送* `for range` *阻塞* |'));assert.ok(table.includes('| *other* | *unchanged* |'));assert.ok(table.startsWith(original.slice(0,original.indexOf('| 场景'))));
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),original);await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),table);await vscode.commands.executeCommand('undo');await doc.save();
+ select('发送','unchanged');await vscode.commands.executeCommand('noteglow.background');await saved();const tableColored=doc.getText();
+ const tableHtml=await vscode.commands.executeCommand('markdown.api.render',tableColored);assert.match(tableHtml,/<table>/);assert.match(tableHtml,/<code><span style="background-color:#fff88f">for range<\/span><\/code>/);assert.equal(records(tableColored).length,1);
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),original);await doc.save();
+ // 已有链接和下划线位于整段选区边缘时，不能丢失源码定界符；同时验证批量 uniform 路径。
+ const inline='[foo](https://example.com) tail\n\nhead <u>bar</u>';
+ await editor.edit(builder=>builder.replace(new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length)),inline));await doc.save();
+ editor.selection=new vscode.Selection(doc.positionAt(0),doc.positionAt(inline.length));
+ await vscode.commands.executeCommand('noteglow.bold');await saved();
+ const formattedInline=doc.getText(),inlineHtml=await vscode.commands.executeCommand('markdown.api.render',formattedInline);
+ assert.match(inlineHtml,/<a\b[^>]*href="https:\/\/example.com"/);assert.match(inlineHtml,/<u>/);assert.match(inlineHtml,/<strong>/);assert.doesNotMatch(inlineHtml,/\*\*/);
+ await vscode.commands.executeCommand('undo');assert.equal(doc.getText(),inline);await vscode.commands.executeCommand('redo');assert.equal(doc.getText(),formattedInline);await doc.save();
+ // 不支持的中间引用必须整批拒绝，不能先修改右侧再遗漏左侧。
+ const protectedSource='alpha\n\n> quote\n\nomega';
+ await editor.edit(builder=>builder.replace(new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length)),protectedSource));await doc.save();
+ editor.selection=new vscode.Selection(doc.positionAt(0),doc.positionAt(protectedSource.length));const version=doc.version;
+ await vscode.commands.executeCommand('noteglow.bold');assert.equal(doc.getText(),protectedSource);assert.equal(doc.version,version);await saved();
+ console.log('NoteGlow multiline: three paragraphs plus code, table rows, colors, official preview, disk equality, single Undo/Redo and guarded-gap atomicity passed.');
 }

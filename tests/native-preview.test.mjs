@@ -73,3 +73,30 @@ test('unfinished trailing fence invalidates only itself and never exposes earlie
  }
  const start=unfinished.indexOf('unfinished');assert.throws(()=>applyNativeCodeColor(unfinished,start,start+10,'background',bg));
 });
+
+
+test('table colors bind to exact cells and remain compatible with native Obsidian records',()=>{
+ const raw='before\n\n| same | same |\n| :--- | ---: |\n| same | `a\\|b` &amp; 😀 |\n|  | same |\n\nafter';
+ const start=raw.indexOf('`a'),end=raw.indexOf('😀')+2;
+ let source=applyNativeTextColor(raw,start,end,'background',bg).text;
+ source=applyNativeTextColor(source,start,end,'foreground',fg).text;
+ const block=scanNativeText(source).find(block=>block.kind==='table');assert.equal(block.status,'valid');
+ const md=extendMarkdownIt(new MarkdownIt({html:true})),html=md.render(source),cells=nodes(html).filter(node=>['th','td'].includes(node.tagName));
+ assert.equal(cells.length,6);assert.equal(text(cells[3]),'a|b & 😀');
+ const painted=colors(html);assert.ok(painted.length>=2);assert.ok(painted.every(item=>item.style.includes(fg)&&item.style.includes(bg)));
+ assert.equal(painted.map(item=>item.text).join(''),'a|b & 😀');
+ assert.ok(cells.filter((_,i)=>i!==3).every(cell=>!hasPaint(cell)));
+ function hasPaint(node){return node.tagName==='span'||(node.childNodes??[]).some(hasPaint);}
+ assert.ok(!html.includes('noteglow-text-colors'));assert.ok(html.includes('<code>'));
+ const stale=source.replace('`a\\|b`','`other`');assert.deepEqual(colors(md.render(stale)),[]);
+});
+
+test('multiple paragraph heading list and table records render their own colors with HTML disabled',()=>{
+ const source='alpha\n\n# heading\n\n- one\n- two\n\n| label | value |\n| --- | --- |\n| same | same |';
+ const colored=applyNativeTextColor(source,0,source.length,'background',bg).text;
+ const rendered=extendMarkdownIt(new MarkdownIt({html:false})).render(colored);
+ assert.equal(scanNativeText(colored).filter(block=>block.status==='valid').length,4);
+ assert.ok(rendered.includes('<h1>'));assert.ok(rendered.includes('<ul>'));assert.ok(rendered.includes('<table>'));
+ assert.equal(colors(rendered).map(item=>item.text).join(''),'alphaheadingonetwolabelvaluesamesame');
+ assert.ok(!rendered.includes('noteglow-text-colors'));
+});

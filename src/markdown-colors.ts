@@ -98,7 +98,8 @@ export function formatMarkdownSelection(text: string, from: number, to: number, 
   const selected = model.leaves.filter((leaf) => coveredUnits(leaf, start, end));
   if (!selected.length) throw new Error("请选择可设置格式的正文。");
   if (selected.some((leaf) => leaf.code && leaf.block)) throw new Error("代码块中的字面格式符不参与加粗或斜体；请在正文中设置格式。");
-  if (format !== "code" && selected.some((leaf) => leaf.code)) throw new Error("行内代码不能直接切换加粗或斜体，请先取消代码格式。");
+  const tableCell = findTableCell(model.ast, start, end);
+  if (format !== "code" && selected.some((leaf) => leaf.code) && (!["bold", "italic"].includes(format) || !tableCell && !native)) throw new Error("行内代码不能直接切换加粗或斜体，请先取消代码格式。");
   const edits: Edit[] = [];
   if (format === "code") {
     if (selected.length !== 1) throw new Error("代码格式目前仅支持单个连续文本叶节点。");
@@ -115,7 +116,14 @@ export function formatMarkdownSelection(text: string, from: number, to: number, 
       const delimiter = "`".repeat(Math.max(0, ...Array.from(value.matchAll(/`+/g), (match) => match[0].length)) + 1);
       const padding = value.startsWith("`") || value.endsWith("`") || (value.startsWith(" ") && value.endsWith(" ") && value.trim()) ? " " : "";
       const prefix = delimiter + padding;
-      replacement = { text: prefix + value + padding + delimiter, pairs: sourceUnits.map((unit, i) => ({ from: unit.from, to: unit.to, resultFrom: prefix.length + i, resultTo: prefix.length + i + 1 })) };
+      let body = "";
+      const pairs = sourceUnits.map((unit, i) => {
+        const resultFrom = prefix.length + body.length;
+        // GFM 表格即使在行内代码里也需要转义管道；映射包含转义符，清色/取消代码不拆开它。
+        body += tableCell && value[i] === "|" ? "\\|" : value[i];
+        return { from: unit.from, to: unit.to, resultFrom, resultTo: prefix.length + body.length };
+      });
+      replacement = { text: prefix + body + padding + delimiter, pairs };
     }
     const editFrom = leaf.code ? leaf.from : sourceUnits[0].from;
     const editTo = leaf.code ? leaf.to : sourceUnits[sourceUnits.length - 1].to;
@@ -124,13 +132,108 @@ export function formatMarkdownSelection(text: string, from: number, to: number, 
     const local = styleRanges(leaf.styles).map((range) => ({ ...range, from: leaf.units[range.from].from, to: leaf.units[range.to - 1].to }));
     if (leaf.owned) colors.push(...local);
     start = editFrom; end = editTo;
-  } else {
-    const paragraph = findParagraph(model.ast, start, end);
+  } else if (format === "bold" || format === "italic") {
+    const paragraph = tableCell ?? findParagraph(model.ast, start, end);
     if (!paragraph) throw new Error("加粗或斜体目前仅支持同一段落内的连续选区。");
     // 全行选择时排除列表/标题/引用的外部前缀，不能把容器标记放进格式符。
     const pFrom = position(paragraph).from, pTo = position(paragraph).to;
     start = Math.max(start, pFrom); end = Math.min(end, pTo);
-    const wanted = format === "bold" ? "strong" : format === "italic" ? "emphasis" : format === "strike" ? "delete" : format;
+    const wanted = format === "bold" ? "strong" : "emphasis";
+    // 原生正文混选保留行内代码，按代码边界分段；空白留在格式符外，确保 Markdown 能解析。
+    const spans: Array<{ from: number; to: number }> = [];
+    let cursor = start;
+    for (const leaf of tableCell || native ? selected.filter((leaf) => leaf.code) : []) {
+      spans.push({ from: cursor, to: Math.min(end, leaf.from) }); cursor = Math.max(cursor, leaf.to);
+    }
+    spans.push({ from: cursor, to: end });
+    // 已有整段格式可能跨过代码；完整选中时直接移除外层，不在未闭合的祖先标记内拼接。
+    const enclosing = (tableCell || native) && selected.some((leaf) => leaf.code) ? findExactFormat(paragraph, start, end, wanted, selected) : null;
+    if (enclosing?.children?.length) {
+      if (applyOnly) return { text, from, to, ranges: [...legacyRanges] };
+      const bounds = position(enclosing);
+      edits.push({ from: bounds.from, to: position(enclosing.children[0]).from, text: "" }, { from: position(enclosing.children.at(-1)!).to, to: bounds.to, text: "" });
+      spans.length = 0;
+    }
+    if ((tableCell || native) && spans.length && !applyOnly && nativeSelectionFormatState(decoded.text, [{ from: start, to: end }], format).applied) {
+      // 一个正文片段可含多个相邻格式节点；整体取消时逐个移除 AST 分隔符，不能再包一层。
+      const wrapperEdits: Edit[] = [], outerWrappers: Array<{ from: number; to: number }> = []; let partial = false;
+      walkMd(paragraph, (node) => {
+        if (node.type !== wanted || !node.children?.length) return;
+        const bounds = position(node);
+        // 只取消最外层已选格式；其内原有的同类格式不是这次外层切换的删除目标。
+        if (outerWrappers.some((outer) => outer.from <= bounds.from && outer.to >= bounds.to)) return;
+        const units = model.leaves.flatMap((leaf) => leaf.units).filter((unit) => unit.from >= bounds.from && unit.to <= bounds.to);
+        const prose = model.leaves.filter((leaf) => !leaf.code).flatMap((leaf) => leaf.units);
+        if (!prose.some((unit) => unit.from >= Math.max(start, bounds.from) && unit.to <= Math.min(end, bounds.to) && !/^\s+$/.test(unit.value))) return;
+        if (units.some((unit) => unit.from < start || unit.to > end)) {
+          if (tableCell) throw new Error("取消格式时请完整选择已有格式片段，原文未修改。");
+          partial = true; return;
+        }
+        outerWrappers.push(bounds);
+        wrapperEdits.push({ from: bounds.from, to: position(node.children[0]).from, text: "" }, { from: position(node.children.at(-1)!).to, to: bounds.to, text: "" });
+      });
+      // 普通段落的部分选区沿用既有局部格式路径，不能移除覆盖未选文字的祖先。
+      if (!partial) { edits.push(...wrapperEdits); spans.length = 0; }
+    }
+    if ((tableCell || native) && applyOnly && spans.length) {
+      // 混合状态只给尚未格式化的叶片添加标记，已格式化片段保留；代码叶片不参与。
+      spans.length = 0;
+      for (const leaf of selected.filter((leaf) => !leaf.code)) {
+        const units = leaf.units.filter((unit) => unit.from >= start && unit.to <= end);
+        if (!units.length) continue;
+        const from = units[0].from, to = units.at(-1)!.to;
+        let applied = false;
+        walkMd(paragraph, (node) => { const bounds = position(node); if (node.type === wanted && bounds.from <= from && bounds.to >= to) applied = true; });
+        if (!applied) spans.push({ from, to });
+      }
+    }
+    for (const span of spans) {
+      let partFrom = span.from, partTo = span.to;
+      if (tableCell || native) {
+        // 以可见文字定位分段，避免把跨代码的 strong/emphasis 起止标记拆进不同片段。
+        const units = selected.filter((leaf) => !leaf.code).flatMap((leaf) => leaf.units).filter((unit) => unit.from >= partFrom && unit.to <= partTo);
+        while (units.length && /^\s+$/.test(units[0].value)) units.shift();
+        while (units.length && /^\s+$/.test(units.at(-1)!.value)) units.pop();
+        if (!units.length) continue;
+        partFrom = units[0].from; partTo = units.at(-1)!.to;
+        // 可见文字裁剪不能吞掉完整链接、下划线等容器的起止语法。
+        // 只恢复原 span 完整包含、且不跨代码切分的容器；局部标签选区仍留在标签内。
+        walkMd(paragraph, (node) => {
+          if (!["link", "linkReference", "underline", "strong", "emphasis", "delete"].includes(node.type)) return;
+          const bounds = position(node);
+          if (bounds.from < span.from || bounds.to > span.to || bounds.from >= partTo || bounds.to <= partFrom || selected.some((leaf) => leaf.code && leaf.from >= bounds.from && leaf.to <= bounds.to)) return;
+          partFrom = Math.min(partFrom, bounds.from); partTo = Math.max(partTo, bounds.to);
+        });
+      }
+      if (partFrom >= partTo) continue;
+      // 重复格式只补加，不把已有格式切掉；部分选中同一格式容器也保持原样。
+      if (applyOnly) {
+        let alreadyApplied = false;
+        walkMd(paragraph, (node) => {
+          const bounds = position(node);
+          if (node.type === wanted && bounds.from <= partFrom && bounds.to >= partTo) alreadyApplied = true;
+        });
+        if (alreadyApplied) continue;
+      }
+      const wrapper = findExactFormat(paragraph, partFrom, partTo, wanted);
+      if (wrapper?.children?.length) {
+        const bounds = position(wrapper);
+        const innerFrom = position(wrapper.children[0]).from;
+        const innerTo = position(wrapper.children[wrapper.children.length - 1]).to;
+        edits.push({ from: bounds.from, to: innerFrom, text: "" }, { from: innerTo, to: bounds.to, text: "" });
+        if (!tableCell) { start = innerFrom; end = innerTo; }
+      } else {
+        const delimiter = format === "bold" ? "**" : "*";
+        edits.push({ from: partFrom, to: partFrom, text: delimiter }, { from: partTo, to: partTo, text: delimiter });
+      }
+    }
+  } else {
+    const paragraph = tableCell ?? findParagraph(model.ast, start, end);
+    if (!paragraph) throw new Error("加粗或斜体目前仅支持同一段落内的连续选区。");
+    // 全行选择时排除列表/标题/引用的外部前缀，不能把容器标记放进格式符。
+    const pFrom = position(paragraph).from, pTo = position(paragraph).to;
+    start = Math.max(start, pFrom); end = Math.min(end, pTo);
+    const wanted = format === "strike" ? "delete" : format;
     // 重复格式只补加，不把已有格式切掉；部分选中同一格式容器也保持原样。
     if (applyOnly) {
       let alreadyApplied = false;
@@ -154,7 +257,7 @@ export function formatMarkdownSelection(text: string, from: number, to: number, 
         walkMd(paragraph, node => { const bounds = position(node); if (["link", "linkReference"].includes(node.type) && bounds.from < end && bounds.to > start) intersects = true; });
         if (intersects) throw new Error("请选择完整链接再修改，不能嵌套链接。");
       }
-      const open = format === "bold" ? "**" : format === "italic" ? "*" : format === "strike" ? "~~" : format === "underline" ? "<u>" : "[";
+      const open = format === "strike" ? "~~" : format === "underline" ? "<u>" : "[";
       const close = format === "underline" ? "</u>" : format === "link" ? `](${url})` : open;
       edits.push({ from: start, to: start, text: open }, { from: end, to: end, text: close });
     }
@@ -306,6 +409,8 @@ function buildModel(text: string, colors: readonly ColorRange[], isolateInvalidC
     const lang = attr(code, "data-codex-lang") ?? attr(code, "class")?.replace(/^language-/, "");
     leaves.push({ from: island.from, to: island.to, value: flat.units.map((unit) => unit.value).join(""), units: flat.units, styles: flat.styles, code: true, block: island.block, owned: true, lang, boundaries: flat.boundaries });
   }
+  const tables: Array<{ from: number; to: number }> = [];
+  walkMd(ast, (node) => { if (node.type === "table") tables.push(position(node)); });
   walkMd(ast, (node) => {
     const bounds = position(node);
     if (codeIslands.some((island) => island.from <= bounds.from && island.to >= bounds.to)) return;
@@ -313,7 +418,7 @@ function buildModel(text: string, colors: readonly ColorRange[], isolateInvalidC
     let units: Unit[];
     let physicalSuffix = "";
     if (node.type === "text") units = markdownTextUnits(text, node);
-    else if (node.type === "inlineCode") units = inlineCodeUnits(text, node);
+    else if (node.type === "inlineCode") units = inlineCodeUnits(text, node, tables.some((table) => bounds.from >= table.from && bounds.to <= table.to));
     else {
       try { units = blockCodeUnits(text, node); }
       catch (error) {
@@ -371,16 +476,17 @@ function markdownTextUnits(text: string, node: MdNode): Unit[] {
   }
   return result;
 }
-function inlineCodeUnits(text: string, node: MdNode): Unit[] {
+function inlineCodeUnits(text: string, node: MdNode, table = false): Unit[] {
   const { from, to } = position(node), raw = text.slice(from, to);
   const delimiter = /^`+/.exec(raw)?.[0];
   if (!delimiter || !raw.endsWith(delimiter)) throw new Error("行内代码边界不完整。");
   let start = from + delimiter.length, end = to - delimiter.length;
   let value = text.slice(start, end).replace(/\r\n|\r|\n/g, " ");
   if (value.startsWith(" ") && value.endsWith(" ") && value.trim()) { start++; end--; value = value.slice(1, -1); }
-  if (value !== node.value) throw new Error("行内代码文字无法精确映射。");
+  if ((table ? value.replace(/\\\|/g, "|") : value) !== node.value) throw new Error("行内代码文字无法精确映射。");
   const units: Unit[] = [];
   for (let i = start; i < end;) {
+    if (table && text[i] === "\\" && text[i + 1] === "|") { units.push({ from: i, to: i + 2, value: "|" }); i += 2; continue; }
     const width = text[i] === "\r" && text[i + 1] === "\n" ? 2 : String.fromCodePoint(text.codePointAt(i)!).length;
     const logical = /[\r\n]/.test(text[i]) ? " " : text.slice(i, i + width);
     for (const char of logical.split("")) units.push({ from: i, to: i + width, value: char });
@@ -635,7 +741,7 @@ function findParagraph(ast: MdNode, from: number, to: number): MdNode | null {
   walkMd(ast, (node) => { if (node.type !== "paragraph" && node.type !== "heading") return; const bounds = position(node); if (bounds.from <= to && bounds.to >= from) { if (result) result = ast; else result = node; } });
   return result === ast ? null : result;
 }
-function findExactFormat(node: MdNode, from: number, to: number, wanted: string): MdNode | null {
+function findExactFormat(node: MdNode, from: number, to: number, wanted: string, tableLeaves: readonly Leaf[] = []): MdNode | null {
   let result: MdNode | null = null;
   walkMd(node, (candidate) => {
     if (candidate.type !== wanted || !candidate.children?.length) return;
@@ -645,25 +751,40 @@ function findExactFormat(node: MdNode, from: number, to: number, wanted: string)
     let first = candidate.children[0], last = candidate.children[candidate.children.length - 1];
     while (["strong", "emphasis", "delete", "underline"].includes(first.type) && first.children?.length) first = first.children[0];
     while (["strong", "emphasis", "delete", "underline"].includes(last.type) && last.children?.length) last = last.children[last.children.length - 1];
-    const innerFrom = position(first).from, innerTo = position(last).to;
+    const firstCode = first.type === "inlineCode" ? tableLeaves.find((leaf) => leaf.from === position(first).from) : undefined;
+    const lastCode = last.type === "inlineCode" ? tableLeaves.find((leaf) => leaf.to === position(last).to) : undefined;
+    const innerFrom = firstCode?.units[0]?.from ?? position(first).from, innerTo = lastCode?.units.at(-1)?.to ?? position(last).to;
     if (from >= outer.from && from <= innerFrom && to >= innerTo && to <= outer.to) result = candidate;
   });
   return result;
 }
 
+/** 仅在唯一单元格正文内设置格式，不把表格容器标记包入分隔符。 */
+function findTableCell(ast: MdNode, from: number, to: number): MdNode | null {
+  let result: MdNode | null = null;
+  walkMd(ast, (node) => {
+    if (node.type === "tableCell" && node.children?.length && position(node.children[0]).from <= from && position(node.children.at(-1)!).to >= to) result = node;
+  });
+  return result;
+}
+
 /** 原生正文只接受已知 Markdown 容器；返回文字单元，列表号、链接地址和格式符不参与着色。 */
-export function nativeTextBlocks(text: string): Array<{ from: number; to: number; line: number; kind: string; structure: string; supported: boolean; units: Array<{ from: number; to: number }> }> {
+export function nativeTextBlocks(text: string): Array<{ from: number; to: number; line: number; kind: string; structure: string; supported: boolean; cells: Array<{ from: number; to: number }>; units: Array<{ from: number; to: number }> }> {
   const ast = parseMarkdown(text), model = buildModel(text, [], true);
-  const allowed = new Set(["paragraph", "heading", "list", "listItem", "text", "inlineCode", "strong", "emphasis", "delete", "underline", "link", "break"]);
-  return (ast.children ?? []).filter((node) => ["paragraph", "heading", "list"].includes(node.type)).map((node) => {
+  const allowed = new Set(["paragraph", "heading", "list", "listItem", "text", "inlineCode", "strong", "emphasis", "delete", "underline", "link", "break", "table", "tableRow", "tableCell"]);
+  return (ast.children ?? []).filter((node) => ["paragraph", "heading", "list", "table"].includes(node.type)).map((node) => {
     const { from, to } = position(node); let supported = true;
-    const shape: unknown[] = [];
+    const shape: unknown[] = [], cells: Array<{ from: number; to: number }> = [];
+    // 持久化仍以完整表格为单位；批量编辑按非空单元格裁剪，管道/分隔行不属于内容。
+    walkMd(node, (child) => {
+      if (child.type === "tableCell" && child.children?.length) cells.push({ from: position(child.children[0]).from, to: position(child.children.at(-1)!).to });
+    });
     walkMd(node, (child) => shape.push([child.type, child.spread, child.ordered, child.start, child.depth, child.checked, child.url]));
     walkMd(node, (child) => { if (!allowed.has(child.type)) supported = false; });
     if (model.protected.some((range) => from < range.to && to > range.from) || model.unknownHtml.some((range) => from < range.to && to > range.from)) supported = false;
     const leaves = model.leaves.filter((leaf) => leaf.from >= from && leaf.to <= to);
     if (leaves.some((leaf) => leaf.owned || leaf.block)) supported = false;
-    return { from, to, line: node.position!.start.line - 1, kind: node.type, structure: JSON.stringify(shape), supported, units: leaves.flatMap((leaf) => leaf.units.map(({ from, to }) => ({ from, to }))) };
+    return { from, to, line: node.position!.start.line - 1, kind: node.type, structure: JSON.stringify(shape), supported, cells, units: leaves.flatMap((leaf) => leaf.units.map(({ from, to }) => ({ from, to }))) };
   });
 }
 
@@ -747,4 +868,30 @@ export function isPlainMarkdownLine(text: string, from: number, to: number): boo
   if (!paragraph?.children?.some((node) => node.type === "text" && position(node).from <= from && position(node).to >= to)) return false;
   const model = buildModel(text, []);
   return ![...model.protected, ...model.unknownHtml].some((range) => from < range.to && to > range.from);
+}
+
+/** 批量切换看所有可见文字的实际 AST 格式，不能凭某一个格子或星号字面量决定。 */
+export function nativeSelectionFormatState(text: string, selections: readonly { from: number; to: number }[], format: Format): { eligible: boolean; applied: boolean } {
+  const model = buildModel(text, [], true), wanted = format === "bold" ? "strong" : "emphasis";
+  const wrappers: Array<{ from: number; to: number }> = [];
+  walkMd(model.ast, (node) => { if (node.type === wanted) wrappers.push(position(node)); });
+  let eligible = false, applied = true;
+  for (const leaf of model.leaves) {
+    if (format !== "code" && leaf.code) continue;
+    for (const unit of leaf.units) {
+      if (/^\s+$/.test(unit.value) || !selections.some((range) => unit.from >= range.from && unit.to <= range.to)) continue;
+      eligible = true;
+      if (format === "code" ? !leaf.code : !wrappers.some((range) => range.from <= unit.from && range.to >= unit.to)) applied = false;
+    }
+  }
+  return { eligible, applied: eligible && applied };
+}
+
+/** 跨行格式按实际正文容器分段，列表前缀、标题标记和表格管道不进入分隔符。 */
+export function nativeTextFormatRanges(text: string): Array<{ from: number; to: number }> {
+  const ranges: Array<{ from: number; to: number }> = [];
+  walkMd(parseMarkdown(text), (node) => {
+    if (["paragraph", "heading", "tableCell"].includes(node.type) && node.children?.length) ranges.push({ from: position(node.children[0]).from, to: position(node.children.at(-1)!).to });
+  });
+  return ranges;
 }

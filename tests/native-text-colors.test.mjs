@@ -186,7 +186,7 @@ test('native inline code inside bold is reversible; incompatible and partial-cod
  assert.equal(scanNativeText(text)[0].source,'**`alpha`** and beta');
  assert.equal(scanNativeText(text)[0].ranges.length,1);
  at=text.indexOf('alpha');
- for(const format of ['bold','italic'])assert.throws(()=>formatNativeText(text,at,at+5,format),/先取消代码/);
+ for(const format of ['bold','italic'])assert.throws(()=>formatNativeText(text,at,at+5,format),/正文/);
  assert.throws(()=>formatNativeText(text,at+1,at+4,'code'),/完整/);
  const cancelled=formatNativeText(text,at,at+5,'code');assert.equal(scanNativeText(cancelled.text)[0].source,'**alpha** and beta');
  assert.equal(nativeTextColorRanges(cancelled.text).map(range=>cancelled.text.slice(range.from,range.to)).join(''),'alpha');
@@ -257,4 +257,165 @@ test('repeat bold on a mixed formatted and plain selection preserves visible tex
  }
  assert.equal(projectNativeMarkdown(result.text).text,'Alpha Beta');
  assert.equal(formatNativeText(result.text,result.from,result.to,'bold',true).text,result.text);
+});
+
+
+const tableFixture='| 场景 | 结果 |\n| --- | --- |\n| nil | 发送、接收和 `for range` 都会一直阻塞 |\n| other | unchanged |';
+test('table colors share one record after the complete table and clear independently',()=>{
+ let text=paint(tableFixture,'场景','foreground',fg).text;
+ const from=text.indexOf('发送'),to=text.indexOf('阻塞')+2;
+ text=applyNativeTextColor(text,from,to,'background',bg).text;
+ assert.equal(nativeTextDocumentShape(text),nativeTextDocumentShape(tableFixture));
+ assert.equal(text.slice(0,tableFixture.length),tableFixture);
+ const blocks=scanNativeText(text);assert.equal(blocks.length,1);assert.equal(blocks[0].kind,'table');assert.equal(blocks[0].status,'valid');assert.equal(blocks[0].to,tableFixture.length);
+ assert.deepEqual(nativeTextColorRanges(text).map(range=>[range.property,text.slice(range.from,range.to)]),[['background','发送、接收和 '],['background','for range'],['background',' 都会一直阻塞'],['foreground','场景']]);
+ text=applyNativeTextColor(text,from,to).text;
+ assert.deepEqual(nativeTextColorRanges(text).map(range=>text.slice(range.from,range.to)),['场景']);
+ assert.equal(resetNativeTextMetadata(text),tableFixture);
+});
+
+for(const format of ['bold','italic'])test(`table mixed ${format} preserves inline code and both colors through toggle and repeat`,()=>{
+ const from=tableFixture.indexOf('发送'),to=tableFixture.indexOf('阻塞')+2;
+ let text=applyNativeTextColor(tableFixture,from,to,'background',bg).text;
+ text=applyNativeTextColor(text,from,to,'foreground',fg).text;
+ const result=formatNativeText(text,from,to,format),delimiter=format==='bold'?'**':'*';
+ assert.ok(result.text.includes(`${delimiter}发送、接收和${delimiter} \`for range\` ${delimiter}都会一直阻塞${delimiter}`));
+ assert.equal(projectNativeMarkdown(resetNativeTextMetadata(result.text)).text,projectNativeMarkdown(tableFixture).text);
+ assert.equal(scanNativeText(result.text)[0].status,'valid');
+ const projectedColors=value=>{const projection=projectNativeMarkdown(resetNativeTextMetadata(value)),ranges=nativeTextColorRanges(value);return projection.offsets.map(offset=>ranges.filter(range=>range.from<=offset&&range.to>offset).map(range=>[range.property,range.color]));};
+ assert.deepEqual(projectedColors(result.text),projectedColors(text));
+ const repeat=formatNativeText(result.text,result.from,result.to,format,true);assert.equal(repeat.text,result.text);
+ const reverted=formatNativeText(result.text,result.from,result.to,format);assert.equal(reverted.text,text);
+});
+
+test('table code toggle preserves escaped pipes, entities and emoji without making another column',()=>{
+ const source='| one | two |\n| --- | --- |\n| a\\|b &amp; 😀 | next |';
+ const from=source.indexOf('a\\|b'),to=source.indexOf('😀')+2;
+ const painted=applyNativeTextColor(source,from,to,'foreground',fg);
+ const code=formatNativeText(painted.text,from,to,'code');
+ assert.ok(code.text.includes('`a\\|b & 😀`'));assert.equal(scanNativeText(code.text)[0].cells.length,4);
+ const restored=formatNativeText(code.text,code.from,code.to,'code');
+ assert.equal(projectNativeMarkdown(resetNativeTextMetadata(restored.text)).text,projectNativeMarkdown(source).text);
+ assert.equal(scanNativeText(restored.text)[0].status,'valid');
+ assert.throws(()=>applyNativeTextColor(code.text,code.text.indexOf('\\|')+1,code.text.indexOf('\\|')+2,'background',bg),/实体/);
+});
+
+test('table selection rejects separators and empty cells for all actions',()=>{
+ const ranges=[[tableFixture.indexOf('---'),tableFixture.indexOf('---')+3],[0,1]];
+ for(const [start,end] of ranges){
+  assert.throws(()=>applyNativeTextColor(tableFixture,start,end,'background',bg),/单元格/);
+  for(const format of ['bold','italic','code'])assert.throws(()=>formatNativeText(tableFixture,start,end,format),/单元格/);
+ }
+ const empty='| a | b |\n| --- | --- |\n|  | c |',at=empty.lastIndexOf('|  |')+1;
+ assert.throws(()=>applyNativeTextColor(empty,at,at+1,'background',bg),/单元格/);
+ // 正文与表格统一保留行内代码，仅对普通文字设置格式。
+ assert.equal(formatNativeText('text `code` tail',0,16,'bold').text,'**text** `code` **tail**');
+});
+
+
+test('source cross-row selection formats each cell and code batch failure is atomic',()=>{
+ const source='| a | b |\n| --- | --- |\n| one | two |\n| three | four |',from=source.indexOf('one'),to=source.indexOf('four')+4;
+ const result=formatNativeText(source,from,to,'code');assert.equal(result.text,source.replace('one','`one`').replace('two','`two`').replace('three','`three`').replace('four','`four`'));
+ const mixed=source.replace('four','text `code`');assert.throws(()=>formatNativeText(mixed,from,mixed.lastIndexOf('|')-1,'code'),/代码|连续/);
+ const only='| a | b |\n| --- | --- |\n| `one` | `two` |';assert.throws(()=>formatNativeText(only,only.indexOf('`one`'),only.indexOf('`two`')+5,'bold'),/正文/);
+});
+
+for(const [format,marker] of [['bold','**'],['italic','*']])test(`table aggregate ${format} handles adjacent wrappers without touching partial ancestors`,()=>{
+ const source=`| a | b |\n| --- | --- |\n| ${marker}one${marker} ${marker}two${marker} | ${marker}three${marker} |`,from=source.indexOf(marker+'one'),to=source.lastIndexOf('|')-1;
+ const off=formatNativeText(source,from,to,format);assert.equal(off.text,source.replaceAll(marker,''));
+ const mixed=source.replace(marker+'two'+marker,'two'),on=formatNativeText(mixed,mixed.indexOf(marker+'one'),mixed.lastIndexOf('|')-1,format);
+ assert.equal(on.text,source);
+ const partial=source.indexOf('one')+1;assert.throws(()=>formatNativeText(source,partial,to,format),/完整选择/);
+});
+
+
+for(const [format,marker] of [['bold','**'],['italic','*']])test(`continuous paragraphs headings lists and table use uniform ${format} and preserve inline code`,()=>{
+ const source=`${marker}first${marker} \`code\` tail\n\n# heading\n\n- item one\n- item two\n\n| a | b |\n| --- | --- |\n| cell | value |`;
+ const result=formatNativeText(source,0,source.length,format);
+ assert.ok(result.text.startsWith(`${marker}first${marker} \`code\` ${marker}tail${marker}`));
+ assert.ok(result.text.includes(`# ${marker}heading${marker}`));assert.ok(result.text.includes(`- ${marker}item one${marker}\n- ${marker}item two${marker}`));
+ assert.ok(result.text.includes(`| ${marker}cell${marker} | ${marker}value${marker} |`));
+ const off=formatNativeText(result.text,result.from,result.to,format);assert.equal(off.text,source.replace(marker+'first'+marker,'first'));
+});
+
+test('cross-paragraph colors preserve partial endpoints, own metadata and unselected text',()=>{
+ const source='before alpha\n\n# heading\n\nomega after',from=source.indexOf('alpha'),to=source.indexOf('omega')+5;
+ let result=applyNativeTextColor(source,from,to,'background',bg);
+ assert.equal(resetNativeTextMetadata(result.text),source);assert.equal(scanNativeText(result.text).filter(block=>block.status==='valid').length,3);
+ assert.deepEqual(nativeTextColorRanges(result.text).map(range=>result.text.slice(range.from,range.to)),['alpha','heading','omega']);
+ result=applyNativeTextColor(result.text,result.from,result.to,'foreground',fg);
+ assert.equal(scanNativeText(result.text).filter(block=>block.status==='valid').length,3);
+ assert.equal(applyNativeTextColor(result.text,result.from,result.to).text,source);
+});
+
+test('cross-block native code toggles per paragraph and protected gaps reject the entire operation',()=>{
+ const source='one\n\ntwo',coded=formatNativeText(source,0,source.length,'code');assert.equal(coded.text,'`one`\n\n`two`');
+ assert.equal(formatNativeText(coded.text,coded.from,coded.to,'code').text,source);
+ for(const middle of ['> quote','```js\ncode\n```','<div>html</div>','---']){
+  const protectedSource='one\n\n'+middle+'\n\ntwo';
+  assert.throws(()=>applyNativeTextColor(protectedSource,0,protectedSource.length,'background',bg),/不支持/);
+  assert.throws(()=>formatNativeText(protectedSource,0,protectedSource.length,'bold'),/不支持/);
+ }
+ const unsafe='one\n\ntext `code`';assert.throws(()=>formatNativeText(unsafe,0,unsafe.length,'code'),/连续/);
+});
+
+test('cross-block formatting preserves existing colors and rejects stale later block before any output',()=>{
+ let source=applyNativeTextColor('one\n\ntwo',0,3,'foreground',fg).text;source=applyNativeTextColor(source,source.lastIndexOf('two'),source.lastIndexOf('two')+3,'background',bg).text;
+ const last=scanNativeText(source).find(block=>block.source==='two');assert.ok(last);
+ const result=formatNativeText(source,0,last.to,'bold');assert.equal(scanNativeText(result.text).filter(block=>block.status==='valid').length,2);
+ assert.deepEqual(nativeTextColorRanges(result.text).map(range=>result.text.slice(range.from,range.to)),['one','two']);
+ const stale=source.replace('two\n','changed\n');assert.throws(()=>formatNativeText(stale,0,stale.lastIndexOf('changed')+7,'bold'),/过期/);
+});
+
+for(const [format,marker] of [['bold','**'],['italic','*']])test(`partial cross-paragraph ${format} preserves endpoints and colored code through repeat and off`,()=>{
+ const plain='prefix alpha `code` tail\n\nsecond paragraph\n\nlast omega。 suffix';
+ let text=applyNativeTextColor(plain,plain.indexOf('code'),plain.indexOf('code')+4,'background',bg).text;
+ const from=text.indexOf('alpha'),to=text.lastIndexOf('omega')+5;
+ text=applyNativeTextColor(text,from,to,'foreground',fg).text;
+ const end=text.indexOf('omega')+5,first=formatNativeText(text,from,end,format);
+ assert.equal(resetNativeTextMetadata(first.text),`prefix ${marker}alpha${marker} \`code\` ${marker}tail${marker}\n\n${marker}second paragraph${marker}\n\n${marker}last omega${marker}。 suffix`);
+ const colors=value=>{const projection=projectNativeMarkdown(resetNativeTextMetadata(value)),rawProjection=projectNativeMarkdown(value),ranges=nativeTextColorRanges(value);return {text:projection.text,colors:rawProjection.offsets.map(offset=>ranges.filter(range=>range.from<=offset&&range.to>offset).map(range=>[range.property,range.color]))};};
+ assert.deepEqual(colors(first.text),colors(text));
+ const repeat=formatNativeText(first.text,first.from,first.to,format,true);assert.equal(repeat.text,first.text);
+ const off=formatNativeText(first.text,first.from,first.to,format);assert.equal(off.text,text);assert.deepEqual(colors(off.text),colors(text));
+ assert.ok(resetNativeTextMetadata(off.text).startsWith('prefix alpha'));assert.ok(resetNativeTextMetadata(off.text).endsWith('omega。 suffix'));
+});
+
+
+test('multiline state scanning preserves isolated unfinished trailing fence behavior',()=>{
+ const source='alpha\n\nbeta\n\n```js\nunfinished';
+ const to=source.indexOf('beta')+4,result=formatNativeText(source,0,to,'bold');
+ assert.equal(result.text,'**alpha**\n\n**beta**\n\n```js\nunfinished');
+ assert.equal(formatNativeText(result.text,result.from,result.to,'bold').text,source);
+ assert.throws(()=>formatNativeText(source,0,source.length,'bold'),/不支持/);
+});
+
+
+for(const [format,marker] of [['bold','**'],['italic','*']])test(`native ${format} retains complete inline containers at selection edges`,()=>{
+ const sources=['[foo](https://example.com) tail','head [foo](https://example.com)','<u>foo</u> tail','head <u>foo</u>','~~foo~~ tail','head ~~foo~~',format==='bold'?'*foo* tail':'**foo** tail','[**foo**](https://example.com) tail'];
+ for(const source of sources){
+  const colored=applyNativeTextColor(source,0,source.length,'background',bg).text;
+  const styled=formatNativeText(colored,0,source.length,format);
+  assert.equal(resetNativeTextMetadata(styled.text),marker+source+marker,source);
+  assert.equal(formatNativeText(styled.text,styled.from,styled.to,format,true).text,styled.text,source+' repeat');
+  assert.equal(formatNativeText(styled.text,styled.from,styled.to,format).text,colored,source+' off');
+  assert.deepEqual(projectNativeMarkdown(resetNativeTextMetadata(styled.text)).text,projectNativeMarkdown(source).text);
+ }
+});
+
+for(const [format,marker] of [['bold','**'],['italic','*']])test(`partial label and mixed batch ${format} preserve links without expanding the selection`,()=>{
+ const source='[foobar](https://example.com) tail',from=source.indexOf('oo'),partial=formatNativeText(source,from,from+2,format);
+ assert.equal(partial.text,'[f'+marker+'oo'+marker+'bar](https://example.com) tail');
+ const batch='[foo](https://example.com) tail\n\nplain',styled=formatNativeText(batch,0,batch.length,format);
+ assert.equal(projectNativeMarkdown(styled.text).text,projectNativeMarkdown(batch).text);assert.ok(styled.text.includes('https://example.com'));
+ assert.equal(formatNativeText(styled.text,styled.from,styled.to,format).text,batch);
+ const coded='[foo `code` bar](https://example.com) tail';
+ assert.throws(()=>formatNativeText(coded,0,coded.length,format),/结构|文字/,'a link split by code must reject before returning a malformed edit');
+});
+
+
+for(const [format,marker] of [['bold','**'],['italic','*']])test(`cancel outer ${format} retains nested same-format containers and cancels adjacent wrappers`,()=>{
+ const source=`${marker}[${marker}foo${marker}](https://example.com) tail${marker} ${marker}next${marker}`;
+ const off=formatNativeText(source,0,source.length,format);
+ assert.equal(off.text,`[${marker}foo${marker}](https://example.com) tail next`);
 });
